@@ -1,7 +1,7 @@
 # crossposter
 This bot can crosspost vk posts to telegram groups, chats or direct messages. Send `/add vk.com/group @channel` and any new posts from the group will duplicate to channel with pictures, documents, audios and reposts. Videos are coming soon.
 If you use `me` instead of channel username it will send updates to you. Use `/show` and `/del` to manage your subscriptions.  
-Try it yourself at t.me/vkcrosspostbot.
+Try it yourself on [telegram](t.me/vkcrosspostbot).
 # Dependencies
 [Telebot](https://github.com/tucnak/telebot/tree/v3)  
 [vksdk](https://github.com/SevereCloud/vksdk)  
