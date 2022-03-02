@@ -1,7 +1,6 @@
 package main
 
 import (
-	"log"
 	"sync"
 	"time"
 
@@ -44,26 +43,32 @@ func (ps *pubsub) subscribe(sub int64, pub int64, consumer func(<-chan []vkObjec
 	ps.pubToSub[pub].subs[sub] = struct{}{}
 	ps.mu.Unlock()
 }
-func (ps *pubsub) subscribeNoMutex(sub int64, pub int64, consumer func(<-chan []vkObject.WallWallpost)) {
+func (ps *pubsub) addSubscriber(sub int64, consumer func(<-chan []vkObject.WallWallpost)) {
 	if _, exists := ps.subToPub[sub]; !exists {
 		ps.subToPub[sub] = subscriber{feed: make(chan []vkObject.WallWallpost, 4)}
 		go consumer(ps.subToPub[sub].feed)
 	}
+
+}
+func (ps *pubsub) addPublisher(pub int64, pubInstnce vkSource) {
+	if _, exists := ps.pubToSub[pub]; !exists {
+		ps.pubToSub[pub] = pubInstnce
+	}
+
+}
+func (ps *pubsub) subscribeSimple(sub int64, pub int64) {
 	s := ps.subToPub[sub]
 	s.subsCount++
 	ps.subToPub[sub] = s
-	if _, exists := ps.pubToSub[pub]; !exists {
-		ps.pubToSub[pub] = vkSource{lastPost: 0, subs: make(map[int64]struct{})}
-	}
 	ps.pubToSub[pub].subs[sub] = struct{}{}
 }
 func (ps *pubsub) unsubscribe(sub int64, pub int64) {
 	ps.mu.Lock()
 
 	delete(ps.pubToSub[pub].subs, sub)
-	log.Printf("Deleted subscruber %d from publisher %d\n", sub, pub)
+	// log.Printf("Deleted subscruber %d from publisher %d\n", sub, pub)
 	if len(ps.pubToSub[pub].subs) == 0 {
-		log.Printf("Deleted publisher %d\n", pub)
+		// log.Printf("Deleted publisher %d\n", pub)
 		delete(ps.pubToSub, pub)
 	}
 	s := ps.subToPub[sub]
@@ -72,7 +77,7 @@ func (ps *pubsub) unsubscribe(sub int64, pub int64) {
 	if s.subsCount == 0 {
 		close(ps.subToPub[sub].feed)
 		delete(ps.subToPub, sub)
-		log.Printf("Deleted subscriber %d\n", sub)
+		// log.Printf("Deleted subscriber %d\n", sub)
 	}
 	ps.mu.Unlock()
 }

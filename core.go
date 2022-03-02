@@ -446,7 +446,7 @@ func createTableIfNotExists(db *sql.DB) (sql.Result, error) {
 			"create index if not exists sub on pubSub (subID);" +
 			"create index if not exists user on pubSub (userID);")
 }
-func (cp *Crossposter) updateTimeStamp(timeStamp int64, id int64) {
+func (cp *Crossposter) updateTimeStamp(id int64, timeStamp int64) {
 	_, err := cp.dbUpdateStmt.Exec(timeStamp, id)
 	if err != nil {
 		log.Printf("Failed to update db for publisher %d and lastPost %d:\n%s\n", id, timeStamp, err.Error())
@@ -537,7 +537,7 @@ func (cp *Crossposter) readDB() error {
 		if err != nil {
 			return err
 		}
-		cp.ps.pubToSub[id] = vkSource{lastPost: lastPost, subs: make(map[int64]struct{})}
+		cp.ps.addPublisher(id, vkSource{lastPost: lastPost, subs: make(map[int64]struct{})})
 	}
 	rows, err = cp.dbReadSubsStmt.Query()
 	for rows.Next() {
@@ -545,9 +545,11 @@ func (cp *Crossposter) readDB() error {
 		if err != nil {
 			return err
 		}
-		cp.ps.subToPub[id] = subscriber{feed: make(chan []vkObject.WallWallpost, 4), subsCount: 0}
+		id := id
+		cp.ps.addSubscriber(id, func(ch <-chan []vkObject.WallWallpost) {
+			cp.listenAndForward(ch, id)
+		})
 	}
-
 	rows, err = cp.dbSelectAllStmt.Query()
 	if err != nil {
 		return err
@@ -555,14 +557,12 @@ func (cp *Crossposter) readDB() error {
 
 	for rows.Next() {
 		var r pubSubData
-		var id int64
-		err = rows.Scan(&id, &r.userID, &r.pubID, &r.subID)
+		var rowID int64
+		err = rows.Scan(&rowID, &r.userID, &r.pubID, &r.subID)
 		if err != nil {
 			return err
 		}
-		cp.ps.subscribeNoMutex(r.subID, r.pubID, func(ch <-chan []vkObject.WallWallpost) {
-			cp.listenAndForward(ch, id)
-		})
+		cp.ps.subscribeSimple(r.subID, r.pubID)
 	}
 	return nil
 }

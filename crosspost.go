@@ -116,7 +116,7 @@ func (cp *Crossposter) getAudio(audioIds []string) []tele.Inputtable {
 
 func (cp *Crossposter) getAttachments(post *vkObject.WallWallpost) map[string][]tele.Inputtable {
 
-	// because telegram album contains either photo/video or audio or documents, separate them
+	// because telegram album contains either photo/video or audio or documents, we separate them
 	res := make(map[string][]tele.Inputtable)
 	audioIds := []string{}
 	for _, att := range post.Attachments {
@@ -184,6 +184,7 @@ func (cp *Crossposter) sendWithAttachments(text []rune, id int64, att map[string
 		_, err := cp.tgBot.SendAlbum(tele.ChatID(id), att[str], string(text))
 		if err != nil {
 			log.Printf("Failed to send msg:\n%s\n", err.Error())
+			return
 		}
 		time.Sleep(time.Second * 3 * time.Duration(len(att[str])))
 	}
@@ -212,7 +213,6 @@ func (cp *Crossposter) forwardPost(post *vkObject.WallWallpost, chatID int64) {
 
 }
 func (cp *Crossposter) listenAndForward(upd <-chan []vkObject.WallWallpost, chatID int64) {
-
 	for posts := range upd {
 		for index := len(posts) - 1; index >= 0; index-- {
 			cp.forwardPost(&posts[index], chatID)
