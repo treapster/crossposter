@@ -14,3 +14,6 @@ require (
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	golang.org/x/text v0.3.7 // indirect
 )
+
+// we replace because https://github.com/tucnak/telebot/pull/491 is not accepted at the time of writing
+replace gopkg.in/telebot.v3 v3.0.0 => github.com/treapster/telebot v3-album-caption
