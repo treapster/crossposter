@@ -6,7 +6,6 @@ package main
 import (
 	"fmt"
 	"log"
-	"math/rand"
 	"net/http"
 	"strconv"
 	"strings"
@@ -17,16 +16,12 @@ import (
 	tele "gopkg.in/telebot.v3"
 )
 
-type update struct {
-	code int
-	id   int64
-	r    pubSubData
-}
-
 const (
-	batchSize       = 25
-	updatePostCount = 15
+	batchSize       = 20
+	updatePostCount = 20
 	updatePeriod    = time.Minute * 2
+	maxVidDuration  = 102 // because 720p is below 50 MB(telegram limit) for up to 102 seconds
+	// bigger videos are posted via link
 )
 
 type vkReqData struct {
@@ -44,6 +39,21 @@ type vkAudio struct {
 	Title     string `json:"title"`
 }
 
+type preparedAttachments struct {
+	media map[string][]tele.Inputtable
+	links []string
+}
+
+func (att *preparedAttachments) Empty() bool {
+	return len(att.media) == 0 && len(att.links) == 0
+}
+
+type preparedPost struct {
+	att         preparedAttachments
+	text        string
+	copyHistory []preparedPost
+}
+
 func makeObjects(batch []vkReqData) string {
 	if len(batch) == 0 {
 		return ""
@@ -54,37 +64,6 @@ func makeObjects(batch []vkReqData) string {
 		res += `,` + fmt.Sprintf(pat, cur.id, cur.lastPost)
 	}
 	return res
-}
-func makeJs(batch []vkReqData) string {
-	js :=
-		`
-var batch = [%s];
-var postCount = %d;
-var res = [];
-var i = 0;
-while (i < batch.length) {
-	var filtered = [];
-	var posts = API.wall.get({"owner_id": batch[i].id, "count": postCount}).items;
-	var j = 0;
-	var lastPost = 0;
-	while (j < posts.length) {
-		if (posts[j].date > batch[i].lastPost) {
-			filtered.push(posts[j]);
-			if (posts[j].date > lastPost) {
-				lastPost = posts[j].date;
-			}
-		}
-		j = j + 1;
-	}
-	if (filtered.length > 0) {
-		res.push({"id": batch[i].id, "lastPost":lastPost, "posts": filtered});
-	}
-	i = i + 1;
-}
-return res;
-`
-	arrContent := makeObjects(batch)
-	return fmt.Sprintf(js, arrContent, updatePostCount)
 }
 
 func (cp *Crossposter) getAudio(audioIds []string) []tele.Inputtable {
@@ -113,125 +92,198 @@ func (cp *Crossposter) getAudio(audioIds []string) []tele.Inputtable {
 	}
 	return res
 }
+func (cp *Crossposter) getVideo(videoIds []string) ([]tele.Inputtable, []string) {
+	vkRes, err := cp.vkAudio.VideoGet(map[string]interface{}{
+		"videos": strings.Join(videoIds, ","),
+	})
+	if err != nil {
+		log.Printf("Failed to get video:\n%s\n", err.Error())
+		return nil, nil
+	}
+	res := []tele.Inputtable{}
+	resLinks := []string{}
+	for i := range vkRes.Items {
+		v := &vkRes.Items[i]
+		if v.Platform == "YouTube" {
+			resLinks = append(resLinks, convertYoutubeUrl(v.Player))
+			continue
+		}
+		if v.Duration < maxVidDuration && (v.Platform == "vk" || v.Platform == "") {
 
-func (cp *Crossposter) getAttachments(post *vkObject.WallWallpost) map[string][]tele.Inputtable {
+			if url := findVideoURL(v); url == "" {
+				log.Printf("Couldn't find url for video %d_%d\n", v.OwnerID, v.ID)
+			} else {
+				req, _ := http.NewRequest("GET", url, nil)
+				req.Header.Set("User-Agent", kateUserAgent)
+				r, err := cp.vkAudio.Client.Get(url)
+				if err != nil {
+					log.Printf("Failed to get video from url\n%s\n", err.Error())
+					continue
+				}
+				res = append(res, &tele.Video{
+					File: tele.FromReader(r.Body),
+				})
+				continue
+			}
+		}
+		resLinks = append(resLinks, fmt.Sprintf("vk.com/video%d_%d", v.OwnerID, v.ID))
+	}
+	return res, resLinks
+}
+func (cp *Crossposter) getVideos(post *vkObject.WallWallpost) []string {
+	res := []string{}
+	videoIds := []string{}
+	for _, att := range post.Attachments {
+		switch att.Type {
+		case "video":
+			videoIds = append(videoIds, strconv.Itoa(att.Video.OwnerID)+"_"+strconv.Itoa(att.Video.ID))
+		}
+	}
+	if len(videoIds) > 0 {
+		//res["photo/video"] = append(res["photo/video"],
+	}
+	return res
+}
+func (cp *Crossposter) getAttachments(post *vkObject.WallWallpost) preparedAttachments {
 
 	// because telegram album contains either photo/video or audio or documents, we separate them
-	res := make(map[string][]tele.Inputtable)
+	res := preparedAttachments{map[string][]tele.Inputtable{}, []string{}}
 	audioIds := []string{}
+	videoIds := []string{}
 	for _, att := range post.Attachments {
 		switch att.Type {
 		case "photo":
 			url := getPhotoUrl(att.Photo)
-			res["photo/video"] = append(res["photo/video"],
+			res.media["photo/video"] = append(res.media["photo/video"],
 				&tele.Photo{File: tele.FromURL(url)})
 		case "audio":
 			audioIds = append(audioIds, strconv.Itoa(att.Audio.OwnerID)+"_"+strconv.Itoa(att.Audio.ID))
 		case "doc":
-			res["doc"] = append(res["doc"],
+			res.media["doc"] = append(res.media["doc"],
 				&tele.Document{File: tele.FromURL(att.Doc.URL)})
+		case "video":
+			vID := strconv.Itoa(att.Video.OwnerID) + "_" + strconv.Itoa(att.Video.ID)
+			if att.Video.AccessKey != "" {
+				vID += "_" + att.Video.AccessKey
+			}
+			videoIds = append(videoIds, vID)
 		}
 	}
 	if len(audioIds) > 0 {
-		res["audio"] = cp.getAudio(audioIds)
+		res.media["audio"] = cp.getAudio(audioIds)
+	}
+	links := []string{}
+	vids := []tele.Inputtable{}
+	if len(videoIds) > 0 {
+		vids, links = cp.getVideo(videoIds)
+		if len(vids) > 0 {
+			res.media["photo/video"] = append(res.media["photo/video"], vids...)
+		}
+		res.links = links
 	}
 	return res
 }
-func getPhotoUrl(photo vkObject.PhotosPhoto) string {
-	index := len(photo.Sizes) - 1
 
-	// sizes with this letters are cropped so we skip them
-	for photo.Sizes[index].Type != "w" &&
-		photo.Sizes[index].Type != "z" &&
-		photo.Sizes[index].Type != "y" &&
-		photo.Sizes[index].Type != "x" &&
-		photo.Sizes[index].Type != "s" &&
-		photo.Sizes[index].Type != "m" &&
-		index > 0 {
-		index--
-	}
-
-	// we need random because of https://stackoverflow.com/questions/49645510/telegram-bot-send-photo-by-url-returns-bad-request-wrong-file-identifier-http/62672868#62672868
-	return photo.Sizes[index].URL + "&random=" + strconv.Itoa(int(rand.Int31()))
-}
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
 func (cp *Crossposter) sendText(text []rune, chat int64) {
 
 	n := len(text)
 	for n > 0 {
-		toSend := min(n, 4096)
-		_, err := cp.tgBot.Send(tele.ChatID(chat), string(text[0:toSend]))
+		msgLen := findIndexToCut(text, 4096)
+		_, err := cp.tgBot.Send(tele.ChatID(chat), string(text[0:msgLen]))
 		if err != nil {
 			log.Printf("Failed to send msg:\n%s\n", err.Error())
 		}
-		text = text[toSend:]
+		text = text[msgLen:]
 		n = len(text)
 		time.Sleep(time.Second * 3)
 	}
 }
-func (cp *Crossposter) sendWithAttachments(text []rune, id int64, att map[string][]tele.Inputtable) {
-	if len(text) > 1024 {
+func (cp *Crossposter) sendWithAttachments(text []rune, id int64, att preparedAttachments) {
+	text = append(text, '\n')
+	text = append(text, []rune(strings.Join(att.links, "\n"))...)
+	if len(text) > 1024 || len(att.media) == 0 {
 		cp.sendText(text, id)
 		text = text[:0]
 	}
 
-	for str, _ := range att {
-		_, err := cp.tgBot.SendAlbum(tele.ChatID(id), att[str], string(text))
+	for mediaType := range att.media {
+		_, err := cp.tgBot.SendAlbum(tele.ChatID(id), att.media[mediaType], string(text))
 		if err != nil {
 			log.Printf("Failed to send msg:\n%s\n", err.Error())
 			return
 		}
-		time.Sleep(time.Second * 3 * time.Duration(len(att[str])))
+		text = text[:0]
+		time.Sleep(time.Second * 3 * time.Duration(len(att.media[mediaType])))
 	}
 
 }
 
-func (cp *Crossposter) forwardSinglePost(post *vkObject.WallWallpost, chatID int64) {
+func (cp *Crossposter) forwardSinglePost(post *preparedPost, chatID int64) {
 
-	att := cp.getAttachments(post)
-	if len(att) == 0 && len(post.Text) == 0 {
+	if post.att.Empty() {
+		cp.sendText([]rune(post.text), chatID)
 		return
 	}
-	if len(att) == 0 {
-		cp.sendText([]rune(post.Text), chatID)
-		return
-	}
-	cp.sendWithAttachments([]rune(post.Text), chatID, att)
+	cp.sendWithAttachments([]rune(post.text), chatID, post.att)
 }
 
-func (cp *Crossposter) forwardPost(post *vkObject.WallWallpost, chatID int64) {
+func (cp *Crossposter) forwardPost(post *preparedPost, chatID int64) {
 
-	for index := len(post.CopyHistory) - 1; index >= 0; index-- {
-		cp.forwardSinglePost(&post.CopyHistory[index], chatID)
+	for i := range post.copyHistory {
+		cp.forwardSinglePost(&post.copyHistory[i], chatID)
 	}
 	cp.forwardSinglePost(post, chatID)
 
 }
-func (cp *Crossposter) listenAndForward(upd <-chan []vkObject.WallWallpost, chatID int64) {
+func (cp *Crossposter) listenAndForward(upd <-chan []preparedPost, chatID int64) {
 	for posts := range upd {
-		for index := len(posts) - 1; index >= 0; index-- {
-			cp.forwardPost(&posts[index], chatID)
+		for i := range posts {
+			cp.forwardPost(&posts[i], chatID)
 		}
 	}
 }
+func (cp *Crossposter) prepareCopyHistory(post vkObject.WallWallpost) []preparedPost {
+	res := make([]preparedPost, 0, len(post.CopyHistory))
+	// we reverse copy history so in preparedPost slice it is ordered by time
 
+	for i := len(post.CopyHistory) - 1; i >= 0; i-- {
+		if len(post.CopyHistory[i].Attachments) == 0 && post.CopyHistory[i].Text == "" {
+			continue
+		}
+		res = append(res, preparedPost{
+			att:         cp.getAttachments(&post.CopyHistory[i]),
+			text:        post.CopyHistory[i].Text,
+			copyHistory: nil,
+		})
+	}
+	return res
+}
+
+func (cp *Crossposter) preparePosts(posts []vkObject.WallWallpost) []preparedPost {
+	res := make([]preparedPost, 0, len(posts))
+	for i := len(posts) - 1; i >= 0; i-- {
+		res = append(res, preparedPost{
+			att:  cp.getAttachments(&posts[i]),
+			text: posts[i].Text,
+			// we don't call ourselves recursively because we don't want to repeat the same copy history
+			// for every repost, so we call prepareCopyHistory once per actual post
+			copyHistory: cp.prepareCopyHistory(posts[i]),
+		})
+	}
+	return res
+}
 func (cp *Crossposter) processBatch(batch []vkReqData) {
 	var res []vkReqResult
 	err := cp.vk.Execute(makeJs(batch), &res)
 	if err != nil {
 		log.Printf("Failed to execute:\n%s\n", err.Error())
 	} else {
-		for i, _ := range res {
+		for i := range res {
 			pub := cp.ps.pubToSub[res[i].Id]
 			pub.lastPost = res[i].LastPost
 			cp.ps.pubToSub[res[i].Id] = pub
 			cp.updateTimeStamp(res[i].Id, res[i].LastPost)
-			cp.ps.publish(res[i].Id, res[i].Posts)
+			cp.ps.publish(res[i].Id, cp.preparePosts(res[i].Posts))
 		}
 	}
 }
@@ -239,24 +291,25 @@ func (cp *Crossposter) processBatch(batch []vkReqData) {
 func (cp *Crossposter) startCrossposting() {
 	batch := make([]vkReqData, 0, batchSize)
 	for {
-		cp.ps.mu.Lock()
 
+		cp.ps.mu.RLock()
 		for id, pub := range cp.ps.pubToSub {
 			batch = append(batch, vkReqData{
 				id,
 				pub.lastPost,
 			})
 			if len(batch)%batchSize == 0 {
+				cp.ps.mu.RUnlock()
 				cp.processBatch(batch)
+				cp.ps.mu.RLock()
 				batch = batch[:0]
 			}
 		}
+		cp.ps.mu.RUnlock()
 		if len(batch) > 0 {
 			cp.processBatch(batch)
 			batch = batch[:0]
 		}
-		cp.ps.mu.Unlock()
-
 		select {
 		case <-cp.chDone:
 			return

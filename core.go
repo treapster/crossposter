@@ -11,7 +11,6 @@ import (
 	"time"
 
 	vkApi "github.com/SevereCloud/vksdk/v2/api"
-	vkObject "github.com/SevereCloud/vksdk/v2/object"
 	_ "github.com/mattn/go-sqlite3"
 	tele "gopkg.in/telebot.v3"
 )
@@ -37,10 +36,11 @@ var i18n = map[string]botReplies{
 		invalidRequest: "Invalid request",
 		helpMsg: "1. Add this bot to your channel with permission to post messages\n" +
 			"2. Send <code>/add vk.com/group @channel</code> to begin crossposting from group to channel. " +
+			"Use \"me\" instead of username to get messages in DM.\n" +
 			"You can crosspost from personal wall too as long as it is public\n\n" +
 			"If you want to crosspost to private channel without username, you can obtain it's id through @username_to_id_bot and " +
-			"send <code>/add vk.com/group id</code> without @ sign. You can also use \"me\" instead of username or id to get messages in DM. " +
-			"Successfull /add command creates subscription vk => tg identified by a number. To see all your subscriptions with their ids send /show. " +
+			"send <code>/add vk.com/group id</code> without @ sign. " +
+			"Successfull /add command creates subscription vk => tg identified by a number. To see all your subscriptions with their ids send /ls. " +
 			"To delete particular subscription send <code>/del id</code>.",
 		okAdded:       "%s is now subscribed to %s",
 		noSuchGroup:   "Group %s does not exist",
@@ -58,10 +58,11 @@ var i18n = map[string]botReplies{
 		invalidRequest: "Инвалид сюнтах",
 		helpMsg: "1. Добавь меня в свой канал и дай разрешение отправлять сообщения\n" +
 			"2. Отправь <code>/add vk.com/group @channel</code>, чтобы начать дублировать посты из группы в канал. " +
+			"Используй \"me\" вместо юзернейма, чтобы получать посты в ЛС." +
 			"Вместо группы также может быть личная страница, если она пубично доступна.\n\n" +
 			"Чтобы кросспостить в закрытый канал или группу без юзернейма, можешь получить её id через @username_to_id_bot и " +
-			"отправить <code>/add vk.com/group id</code> (без @). Можешь также использовать \"me\" вместо юзернейма, чтобы получать посты в ЛС.\n" +
-			"После добавления через /add создаётся подписка на группу и ей присваивается id. Чтобы посмотреть свои подписки, напиши /show. " +
+			"отправить <code>/add vk.com/group id</code> (без @).\n" +
+			"После добавления через /add создаётся подписка на группу и ей присваивается id. Чтобы посмотреть свои подписки, напиши /ls.\n" +
 			"Чтобы удалить подписку и перестать кросспостить, отправь <code>/del id</code>.",
 		okAdded:       "%s теперь подписан на %s",
 		noSuchGroup:   "Группа %s не существует",
@@ -78,15 +79,15 @@ var i18n = map[string]botReplies{
 }
 
 type CrossposterConfig struct {
-	vkToken      string
-	vkAudioToken string
-	vkApiVersion string
-	tgToken      string
-	dbName       string
+	VkToken      string
+	VkAudioToken string
+	VkApiVersion string
+	TgToken      string
+	DbName       string
 }
 
 // we have one instance of vk api with service token and other
-// with kate mobile token obtained by https://github.com/vodka2/vk-audio-token/tree/master/src/Vodka2/VKAudioToken.
+// with kate mobile token obtained by https://github.com/vodka2/vk-audio-token.
 // kate token allows to download audio but i don't use it for anything else
 // to not get banned or anything.
 type Crossposter struct {
@@ -118,9 +119,10 @@ type pubSubData struct {
 const (
 	reqSubscribe   string = "/add"
 	reqUnsubscribe string = "/del"
-	reqShowSubs    string = "/show"
+	reqShowSubs    string = "/ls"
 	reqHelp        string = "/help"
 	reqStart       string = "/start"
+	kateUserAgent  string = "KateMobileAndroid/56 lite-460 (Android 4.4.2; SDK 19; x86; unknown Android SDK built for x86; en)"
 )
 
 // userError is in fact enum to classify wrong input and generate appropriate messages.
@@ -137,11 +139,13 @@ const (
 	errUserPrivate
 	errNoSuchChannel
 	errInvalidRequest
+	errUserNotAdmin
 	errNoSubs
+	errNoSuchSub
 )
 const (
 	regexAddSub = `^` + reqSubscribe +
-		`\s+(?:(?:https://)?)(?:vk.com/(?P<vk>[a-zA-Z0-9_]+))\s+(?P<tg>(?:@[a-zA-Z][0-9a-zA-Z_]{4,})|(?:-?[0-9]+)|me)\s*$`
+		`\s+(?:(?:https??://)?)(?:vk.com/(?P<vk>[a-zA-Z0-9_\.]+))\s+(?P<tg>(?:@[a-zA-Z][0-9a-zA-Z_]{4,})|(?:-?[0-9]+)|me)\s*$`
 
 	regexDelSub = `^` + reqUnsubscribe + `\s+([0-9]{1,4})$`
 )
@@ -270,7 +274,7 @@ func getLang(c tele.Context) string {
 	}
 	return lang
 }
-func (cp *Crossposter) handleUserError(c tele.Context, err userError) {
+func handleUserError(err userError, c tele.Context) {
 	lang := getLang(c)
 	switch err.code {
 	case errInvalidRequest:
@@ -287,32 +291,42 @@ func (cp *Crossposter) handleUserError(c tele.Context, err userError) {
 		c.Send(fmt.Sprintf(i18n[lang].userPrivate, "vk.com/"+err.userOrGroup))
 	case errNoSubs:
 		c.Send(i18n[lang].noSubs)
+	case errUserNotAdmin:
+		c.Send(i18n[lang].notAdmin)
+	case errNoSuchSub:
+		c.Send(i18n[lang].noSuchSub)
+	}
+}
+func handleErrors(err error, c tele.Context) {
+	switch e := err.(type) {
+	case userError:
+		handleUserError(e, c)
+	default:
+		lang := getLang(c)
+		c.Send(i18n[lang].queryFailed)
+		log.Printf("Internal error: %s", err.Error())
 	}
 }
 func (cp *Crossposter) handleDel(c tele.Context) error {
 	msg := c.Text()
 	matches := cp.delMsgRegex.FindStringSubmatch(msg)
 	if len(matches) != 2 {
-		cp.handleUserError(c, userError{code: errInvalidRequest})
-		return nil
+		return userError{code: errInvalidRequest}
 	}
 	lang := getLang(c)
 	pubSubID, _ := strconv.ParseInt(matches[1], 10, 64)
 
 	rows, err := cp.dbFindPubSubStmt.Query(pubSubID, c.Sender().ID)
 	if err != nil {
-		c.Send(i18n[lang].queryFailed)
 		return err
 	}
 	if !rows.Next() {
-		c.Send(i18n[lang].noSuchSub)
-		return nil
+		return userError{code: errNoSuchSub}
 	}
 	var pubID, subID int64
 	err = rows.Scan(&pubID, &subID)
 	if err != nil {
-		c.Send(i18n[lang].queryFailed)
-		return nil
+		return err
 	}
 
 	rows.Close()
@@ -320,7 +334,6 @@ func (cp *Crossposter) handleDel(c tele.Context) error {
 		"delete from publishers where id not in (select pubID from pubSub);"+
 		"delete from subscribers where id not in (select subID from pubSub);", c.Sender().ID, pubSubID, pubID)
 	if err != nil {
-		c.Send(i18n[lang].queryFailed)
 		return err
 	}
 	cp.ps.unsubscribe(subID, pubID)
@@ -335,14 +348,12 @@ func (cp *Crossposter) handleAdd(c tele.Context) error {
 	msg := c.Text()
 	matches := cp.addMsgRegex.FindStringSubmatch(msg)
 	if len(matches) != 3 {
-		cp.handleUserError(c, userError{code: errInvalidRequest})
-		return nil
+		return userError{code: errInvalidRequest}
 	}
 	vkName, tgName := matches[1], matches[2]
 	vkId, err := cp.resolveVkName(vkName)
 	if err != nil {
-		cp.handleUserError(c, err.(userError))
-		return nil
+		return err
 	}
 	var tgId int64
 	user := c.Sender().ID
@@ -353,12 +364,10 @@ func (cp *Crossposter) handleAdd(c tele.Context) error {
 	} else {
 		tgId, err = cp.ResolveTgName(tgName)
 		if err != nil {
-			cp.handleUserError(c, userError{errNoSuchChannel, tgName})
-			return nil
+			return userError{errNoSuchChannel, tgName}
 		}
 		if !cp.isUserAdmin(user, tgId) {
-			c.Send(i18n[lang].notAdmin)
-			return nil // this return is a single thing that prevents users from messing each other's subscriptions
+			return userError{code: errUserNotAdmin} // this return is a single thing that prevents users from messing each other's subscriptions
 		}
 	}
 
@@ -375,16 +384,9 @@ func (cp *Crossposter) handleAdd(c tele.Context) error {
 			"insert or ignore into subscribers (id, flags) values(?, 0);"+
 			"insert into pubSub (userID, pubID, subID) values (?, ?, ?);", res.pubID, res.subID, user, res.pubID, res.subID)
 	if err != nil {
-		c.Send(i18n[lang].queryFailed)
-		log.Printf("Failed to insert data to db:\n%s", err.Error())
-		return nil
+		return err
 	}
-	if err != nil {
-		c.Send(i18n[lang].queryFailed)
-		log.Printf("Failed to insert data to db:\n%s", err.Error())
-		return nil
-	}
-	cp.ps.subscribe(tgId, vkId, func(ch <-chan []vkObject.WallWallpost) {
+	cp.ps.subscribe(tgId, vkId, func(ch <-chan []preparedPost) {
 		cp.listenAndForward(ch, tgId)
 	})
 	c.Send(fmt.Sprintf(i18n[lang].okAdded, tgName, "vk.com/"+vkName))
@@ -422,8 +424,7 @@ func (cp *Crossposter) handleShow(c tele.Context) error {
 		msg += fmt.Sprintf(patt, id, vkName, tgName)
 	}
 	if msg == "" {
-		cp.handleUserError(c, userError{code: errNoSubs})
-		return nil
+		return userError{code: errNoSubs}
 	}
 	return c.Send(msg)
 }
@@ -546,7 +547,7 @@ func (cp *Crossposter) readDB() error {
 			return err
 		}
 		id := id
-		cp.ps.addSubscriber(id, func(ch <-chan []vkObject.WallWallpost) {
+		cp.ps.addSubscriber(id, func(ch <-chan []preparedPost) {
 			cp.listenAndForward(ch, id)
 		})
 	}
@@ -556,13 +557,13 @@ func (cp *Crossposter) readDB() error {
 	}
 
 	for rows.Next() {
-		var r pubSubData
+		var ps pubSubData
 		var rowID int64
-		err = rows.Scan(&rowID, &r.userID, &r.pubID, &r.subID)
+		err = rows.Scan(&rowID, &ps.userID, &ps.pubID, &ps.subID)
 		if err != nil {
 			return err
 		}
-		cp.ps.subscribeSimple(r.subID, r.pubID)
+		cp.ps.subscribeSimple(ps.subID, ps.pubID)
 	}
 	return nil
 }
@@ -586,15 +587,16 @@ func (cp *Crossposter) setHandlers() {
 }
 func NewCrossposter(cfg CrossposterConfig) (*Crossposter, error) {
 	cp := &Crossposter{}
-	cp.vk = vkApi.NewVK(cfg.vkToken)
-	cp.vkAudio = vkApi.NewVK(cfg.vkAudioToken)
-	cp.vkAudio.UserAgent = "KateMobileAndroid/56 lite-460 (Android 4.4.2; SDK 19; x86; unknown Android SDK built for x86; en)"
+	cp.vk = vkApi.NewVK(cfg.VkToken)
+	cp.vkAudio = vkApi.NewVK(cfg.VkAudioToken)
+	cp.vkAudio.UserAgent = kateUserAgent
 
 	var err error
 	cp.tgBot, err = tele.NewBot(tele.Settings{
-		Token:     cfg.tgToken,
+		Token:     cfg.TgToken,
 		Poller:    &tele.LongPoller{Timeout: 10 * time.Second},
 		ParseMode: "HTML",
+		OnError:   handleErrors,
 	})
 
 	if err != nil {
@@ -604,7 +606,7 @@ func NewCrossposter(cfg CrossposterConfig) (*Crossposter, error) {
 	cp.addMsgRegex = regexp.MustCompile(regexAddSub)
 	cp.delMsgRegex = regexp.MustCompile(regexDelSub)
 
-	cp.dbName = cfg.dbName
+	cp.dbName = cfg.DbName
 	err = cp.initDB()
 	if err != nil {
 		return nil, fmt.Errorf("NewCrossposter: failed to init DB:\n%w", err)

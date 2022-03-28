@@ -16,4 +16,4 @@ require (
 )
 
 // we replace because https://github.com/tucnak/telebot/pull/491 is not accepted at the time of writing
-replace gopkg.in/telebot.v3 v3.0.0 => github.com/treapster/telebot v3-album-caption
+replace gopkg.in/telebot.v3 v3.0.0 => github.com/treapster/telebot v0.0.0-20220226220943-6f3c776d0f14

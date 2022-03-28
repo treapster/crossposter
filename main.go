@@ -1,20 +1,25 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 )
 
 func main() {
-
-	cp, err := NewCrossposter(CrossposterConfig{
-		vkToken:      os.Getenv("CROSSPOSTER_VK_TOKEN"),
-		vkAudioToken: os.Getenv("CROSSPOSTER_VKAUDIO_TOKEN"),
-		vkApiVersion: "5.131",
-		tgToken:      os.Getenv("CROSSPOSTER_TG_TOKEN"),
-		dbName:       "./crossposter.db",
-	})
+	var config CrossposterConfig
+	data, err := os.ReadFile("./config.json")
+	if err != nil {
+		log.Printf(err.Error() + "\n")
+		return
+	}
+	err = json.Unmarshal(data, &config)
+	if err != nil {
+		log.Printf(err.Error() + "\n")
+		return
+	}
+	cp, err := NewCrossposter(config)
 	if err != nil {
 		log.Printf(err.Error() + "\n")
 		return
