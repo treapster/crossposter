@@ -1,0 +1,5 @@
+.vscode
+crossposter.db
+config.json
+crossposter
+*.tmp

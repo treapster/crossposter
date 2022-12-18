@@ -1,0 +1,674 @@
+package main
+
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+	"log"
+	"os"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	vkApi "github.com/SevereCloud/vksdk/v2/api"
+	_ "github.com/mattn/go-sqlite3"
+	tele "gopkg.in/telebot.v3"
+)
+
+type botReplies struct {
+	okAdded           string
+	helpMsg           string
+	invalidRequest    string
+	noSuchGroup       string
+	noSuchChannel     string
+	noSuchUser        string
+	groupPrivate      string
+	userPrivate       string
+	queryFailed       string
+	noSuchSub         string
+	delSuccess        string
+	noSubs            string
+	notAdmin          string
+	alreadySubscribed string
+}
+
+var i18n = map[string]botReplies{
+	"ru": {
+		invalidRequest: "Инвалид сюнтах",
+		helpMsg: "1. Добавь меня в свой канал и дай разрешение отправлять сообщения\n" +
+			"2. Отправь <code>/add vk.com/group @channel</code>, чтобы начать дублировать посты из группы в канал. " +
+			"Либо используй \"me\" вместо юзернейма, чтобы получать посты в ЛС. " +
+			"Вместо группы также может быть личная страница, если она пубично доступна.\n\n" +
+			"Чтобы кросспостить в закрытый канал или группу без юзернейма, можешь получить её id через @username_to_id_bot и " +
+			"отправить <code>/add vk.com/group id</code> (без @).\n" +
+			"Также если добавить в конце команды букву s (source), в конце каждого сообщения будет " +
+			"ссылка на исходный пост с текстом <i>[Имя паблика]</i>.\n\n" +
+			"После добавления через /add создаётся подписка на группу и ей присваивается id. Чтобы посмотреть свои подписки, напиши /ls.\n" +
+			"Чтобы удалить подписку и перестать кросспостить, отправь <code>/del id</code>.",
+		okAdded:           "%s теперь подписан на %s",
+		noSuchGroup:       "Группа %s не существует",
+		noSuchUser:        "Пользователь %s не существует",
+		noSuchChannel:     "Канал %s не существует",
+		groupPrivate:      "Группа %s закрыта или заблокирована",
+		userPrivate:       "Страница пользователя %s заблокирована или скрыта",
+		queryFailed:       "Не удалось выполнить запрос из-за неизвестной ошибки",
+		noSuchSub:         "Нет подписки с таким id",
+		alreadySubscribed: "%s уже подписан на vk.com/%s",
+		delSuccess:        "Подписка %d успешно удалена",
+		noSubs:            "Список каналов пуст",
+		notAdmin:          "Как минимум одному из нас не хватает прав администратора этого чата. Они должны быть у нас обоих.",
+	},
+}
+
+type CrossposterConfig struct {
+	VkToken      string
+	VkAudioToken string
+	VkApiVersion string
+	TgToken      string
+	DbName       string
+	UpdatePeriod int64
+}
+
+type resolvedVkId struct {
+	ScreenName string
+	Name       string
+}
+
+// we have one instance of vk api with service token and other
+// with kate mobile token obtained by https://github.com/vodka2/vk-audio-token.
+// kate token allows to download audio but i don't use it for anything else
+// to not get banned or anything.
+type Crossposter struct {
+	vk               *vkApi.VK
+	vkAudio          *vkApi.VK
+	vkIdCache        CacheMap[int64, resolvedVkId]
+	updatePeriod     time.Duration
+	tgBot            *tele.Bot
+	db               *sql.DB
+	dbName           string
+	dbSelectStmt     *sql.Stmt
+	dbDelStmt        *sql.Stmt
+	dbFindPubSubStmt *sql.Stmt
+	dbSelectAllStmt  *sql.Stmt
+	dbUpdateStmt     *sql.Stmt
+	dbReadPubsStmt   *sql.Stmt
+	dbReadSubsStmt   *sql.Stmt
+	addMsgRegex      *regexp.Regexp
+	delMsgRegex      *regexp.Regexp
+	chDone           chan bool
+	ps               pubsub
+}
+
+type pubSubData struct {
+	userID   int64
+	pubID    int64
+	subID    int64
+	lastPost int64
+	flags    uint64
+}
+
+const (
+	reqSubscribe   string = "/add"
+	reqUnsubscribe string = "/del"
+	reqShowSubs    string = "/ls"
+	reqHelp        string = "/help"
+	reqStart       string = "/start"
+	kateUserAgent  string = "KateMobileAndroid/56 lite-460 (Android 4.4.2; SDK 19; x86; unknown Android SDK built for x86; en)"
+)
+
+type userError struct {
+	code          int
+	vkUserOrGroup string
+	tgUserOrGroup string
+}
+
+const (
+	errNoSuchGroup int = iota + 1
+	errGroupPrivate
+	errNoSuchUser
+	errUserPrivate
+	errNoSuchChannel
+	errInvalidRequest
+	errUserNotAdmin
+	errNoSubs
+	errNoSuchSub
+	errAlreadySubscribed
+)
+const (
+	addCommandShowSource = `s`
+
+	regexAddSub = `^` + reqSubscribe +
+		`\s+` +
+		`(?:(?:https??://)?)` +
+		`(?:vk.com/(?P<vk>[a-zA-Z0-9_\.]+))\s+` +
+		`(?P<tg>(?:@[a-zA-Z][0-9a-zA-Z_]{4,})|(?:-?[0-9]+)|me)` +
+		`(?P<link_data>` +
+		`(\s+` + addCommandShowSource + `)|()` +
+		`)\s*$`
+
+	regexDelSub = `^` + reqUnsubscribe + `\s+([0-9]{1,4})$`
+)
+
+// it is dummy method, user errors are handled by HandleUserError
+func (err userError) Error() string {
+	switch err.code {
+	case errNoSuchGroup:
+		return "No such group"
+	case errGroupPrivate:
+		return "Group is private"
+	case errNoSuchUser:
+		return "user doesn't exist"
+	case errNoSuchChannel:
+		return "No such channel"
+	}
+	return "Unknown error"
+}
+
+func (cp *Crossposter) isUserAdmin(user int64, chat int64) bool {
+	admins, err := cp.tgBot.AdminsOf(&tele.Chat{ID: chat})
+	if err != nil {
+		return false
+	}
+	for _, a := range admins {
+		if a.User.ID == user {
+			return true
+		}
+	}
+	return false
+}
+func (cp *Crossposter) resolveVkId(id int64) (resolvedVkId, error) {
+	if res, e := cp.vkIdCache.Get(id); e {
+		return res, nil
+	}
+	var err error
+	if id > 0 {
+		usr, err := cp.vk.UsersGet(vkApi.Params{
+			"user_ids": id,
+			"fields":   "screen_name",
+			"lang":     "ru",
+		})
+		if err == nil && len(usr) > 0 {
+			res := resolvedVkId{usr[0].ScreenName, usr[0].FirstName + " " + usr[0].LastName}
+			cp.vkIdCache.Put(id, res)
+			return res, nil
+		}
+	} else {
+		group, err := cp.vk.GroupsGetByID(vkApi.Params{
+			"group_ids": -id,
+		})
+		if err == nil && len(group) > 0 {
+			res := resolvedVkId{group[0].ScreenName, group[0].Name}
+			cp.vkIdCache.Put(id, res)
+			return res, nil
+		}
+	}
+	return resolvedVkId{}, fmt.Errorf("Failed to resolve vk id %d: %s: ", id, err.Error())
+}
+func (cp *Crossposter) vkScreenNameById(id int64) (string, error) {
+
+	res, err := cp.resolveVkId(id)
+	if err != nil {
+		return "", err
+	}
+	return res.ScreenName, nil
+}
+func (cp *Crossposter) vkNameById(id int64) (string, error) {
+
+	res, err := cp.resolveVkId(id)
+	if err != nil {
+		return "", err
+	}
+	return res.Name, nil
+}
+func (cp *Crossposter) ResolveTgID(id int64) (string, error) {
+	chat, err := cp.tgBot.ChatByID(id)
+	if err != nil {
+		return "", err
+	}
+
+	if chat.Username == "" {
+		switch chat.Type {
+		case "private":
+			return chat.FirstName + " " + chat.LastName, nil
+		default:
+			return chat.Title, nil
+		}
+	} else {
+		return "@" + chat.Username, nil
+	}
+}
+func (cp *Crossposter) ResolveTgName(name string) (int64, error) {
+	chat, err := cp.tgBot.ChatByUsername(name)
+	if err != nil {
+		return 0, err
+	}
+	return chat.ID, nil
+}
+func (cp *Crossposter) resolveVkName(name string) (int64, error) {
+	vkResp, err := cp.vk.UtilsResolveScreenName(vkApi.Params{
+		"screen_name": name,
+	})
+
+	if err != nil {
+		log.Printf("resolveVkName: %s", err.Error())
+		return 0, userError{code: errNoSuchGroup, vkUserOrGroup: name}
+	}
+
+	var id int64
+	switch vkResp.Type {
+	case "group":
+		id = int64(vkResp.ObjectID)
+		res, err := cp.vk.GroupsGetByID(vkApi.Params{
+			"group_ids": id,
+		})
+		if err == nil && len(res) > 0 {
+			if res[0].IsClosed == 0 && res[0].Deactivated == "" {
+				return -id, nil
+			}
+			return 0, userError{code: errGroupPrivate, vkUserOrGroup: name}
+		}
+		return 0, userError{code: errNoSuchGroup, vkUserOrGroup: name}
+
+	case "user":
+		id = int64(vkResp.ObjectID)
+		res, err := cp.vk.UsersGet(vkApi.Params{
+			"user_ids": id,
+		})
+		if err == nil && len(res) > 0 {
+			if res[0].IsClosed == false && res[0].Deactivated == "" {
+				return id, nil
+			}
+			return 0, userError{code: errUserPrivate, vkUserOrGroup: name}
+		}
+		return 0, userError{code: errNoSuchUser, vkUserOrGroup: name}
+	default:
+		return 0, userError{code: errNoSuchGroup, vkUserOrGroup: name}
+	}
+}
+func getLang(c tele.Context) string {
+	return "ru"
+}
+func handleUserError(err userError, c tele.Context) {
+	lang := getLang(c)
+	switch err.code {
+	case errInvalidRequest:
+		c.Send(i18n[lang].invalidRequest)
+	case errNoSuchGroup:
+		c.Send(fmt.Sprintf(i18n[lang].noSuchGroup, "vk.com/"+err.vkUserOrGroup))
+	case errNoSuchUser:
+		c.Send(fmt.Sprintf(i18n[lang].noSuchUser, "vk.com/"+err.vkUserOrGroup))
+	case errNoSuchChannel:
+		c.Send(fmt.Sprintf(i18n[lang].noSuchChannel, err.tgUserOrGroup))
+	case errGroupPrivate:
+		c.Send(fmt.Sprintf(i18n[lang].groupPrivate, "vk.com/"+err.vkUserOrGroup))
+	case errUserPrivate:
+		c.Send(fmt.Sprintf(i18n[lang].userPrivate, "vk.com/"+err.vkUserOrGroup))
+	case errNoSubs:
+		c.Send(i18n[lang].noSubs)
+	case errUserNotAdmin:
+		c.Send(i18n[lang].notAdmin)
+	case errNoSuchSub:
+		c.Send(i18n[lang].noSuchSub)
+	case errAlreadySubscribed:
+		c.Send(fmt.Sprintf(i18n[lang].alreadySubscribed, err.tgUserOrGroup, err.vkUserOrGroup))
+	}
+}
+func handleErrors(err error, c tele.Context) {
+	switch e := err.(type) {
+	case userError:
+		handleUserError(e, c)
+	default:
+		lang := getLang(c)
+		c.Send(i18n[lang].queryFailed)
+		log.Printf("Internal error: %s", err.Error())
+	}
+}
+func (cp *Crossposter) handleDel(c tele.Context) error {
+	msg := c.Text()
+	matches := cp.delMsgRegex.FindStringSubmatch(msg)
+	if len(matches) != 2 {
+		return userError{code: errInvalidRequest}
+	}
+	lang := getLang(c)
+	pubSubID, _ := strconv.ParseInt(matches[1], 10, 64)
+
+	rows, err := cp.dbFindPubSubStmt.Query(pubSubID, c.Sender().ID)
+	if err != nil {
+		return err
+	}
+	if !rows.Next() {
+		return userError{code: errNoSuchSub}
+	}
+	var pubID, subID int64
+	err = rows.Scan(&pubID, &subID)
+	if err != nil {
+		return err
+	}
+
+	rows.Close()
+	_, err = cp.db.Exec("delete from pubSub where userID=? and pubSubID=?;"+
+		"delete from publishers where id not in (select pubID from pubSub);"+
+		"delete from subscribers where id not in (select subID from pubSub);", c.Sender().ID, pubSubID, pubID)
+	if err != nil {
+		return err
+	}
+	cp.ps.unsubscribe(subID, pubID)
+	c.Send(fmt.Sprintf(i18n[lang].delSuccess, pubSubID))
+	log.Printf("PubSub %d owned by %s deleted\n", pubSubID, c.Sender().Username)
+	return nil
+}
+
+func (cp *Crossposter) handleHelp(c tele.Context) error {
+	lang := getLang(c)
+	return c.Send(i18n[lang].helpMsg)
+}
+func (cp *Crossposter) handleAdd(c tele.Context) error {
+	msg := c.Text()
+	matches := cp.addMsgRegex.FindStringSubmatch(msg)
+	if len(matches) < 4 {
+		return userError{code: errInvalidRequest}
+	}
+	vkName, tgName, tgLinkData := matches[1], matches[2], matches[3]
+	var flags uint64 = 0
+	if strings.Contains(tgLinkData, addCommandShowSource) {
+		flags |= flagAddLinkToPost
+	}
+
+	vkId, err := cp.resolveVkName(vkName)
+	if err != nil {
+		return err
+	}
+	var tgId int64
+	user := c.Sender().ID
+	lang := getLang(c)
+	if tgName == "me" {
+		tgId = user
+		tgName = c.Sender().FirstName + c.Sender().LastName
+	} else {
+		tgId, err = cp.ResolveTgName(tgName)
+		if err != nil {
+			return userError{code: errNoSuchChannel, tgUserOrGroup: tgName}
+		}
+		if !cp.isUserAdmin(user, tgId) {
+			return userError{code: errUserNotAdmin} // this return is a single thing that prevents users from messing each other's subscriptions
+		}
+	}
+
+	res := pubSubData{
+		userID:   user,
+		pubID:    vkId,
+		subID:    tgId,
+		lastPost: 0,
+	}
+
+	// TODO: convert this and corresponding delete query to transaction
+	_, err = cp.db.Exec(
+		"insert or ignore into publishers (id, lastPost) values(?,(select strftime('%s')));"+
+			"insert or ignore into subscribers (id, flags) values(?, ?);"+
+			"insert into pubSub (userID, pubID, subID, flags) values (?, ?, ?, ?);",
+		res.pubID, res.subID, flags, user, res.pubID, res.subID, flags)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE") {
+			return userError{code: errAlreadySubscribed,
+				tgUserOrGroup: tgName,
+				vkUserOrGroup: vkName,
+			}
+		}
+		return err
+	}
+	cp.ps.subscribe(tgId, vkId, flags, func(ch <-chan update) {
+		cp.listenAndForward(ch, tgId)
+	})
+	c.Send(fmt.Sprintf(i18n[lang].okAdded, tgName, "vk.com/"+vkName))
+	log.Printf("%d (%s) subscribed to vk.com/%s\n", tgId, tgName, vkName)
+	return nil
+}
+func (cp *Crossposter) handleShow(c tele.Context) error {
+	rows, err := cp.dbSelectStmt.Query(c.Sender().ID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	msg := ""
+	patt := "[%d] %s => %s\n"
+	for rows.Next() {
+		var (
+			id  int64
+			pub int64
+			sub int64
+		)
+		err := rows.Scan(&id, &pub, &sub)
+		if err != nil {
+			return err
+		}
+		vkName, err := cp.vkScreenNameById(pub)
+		if err != nil {
+			vkName = "[DELETED]"
+		} else {
+			vkName = "vk.com/" + vkName
+		}
+		tgName, err := cp.ResolveTgID(sub)
+		if err != nil {
+			tgName = "[DELETED]"
+		}
+		msg += fmt.Sprintf(patt, id, vkName, tgName)
+	}
+	if msg == "" {
+		return userError{code: errNoSubs}
+	}
+	return c.Send(msg)
+}
+
+func createTableIfNotExists(db *sql.DB) (sql.Result, error) {
+
+	return db.Exec(
+		"create table if not exists publishers" +
+			"(id integer primary key, lastPost integer);" +
+			"create table if not exists subscribers" +
+			"(id integer primary key, flags integer);" +
+			"create table if not exists pubSub" +
+			"(pubSubID integer primary key, userID integer, pubID integer, subID integer, flags integer, " +
+			"unique(pubID, subID), " +
+			"foreign key (pubID) references publishers(id)," +
+			"foreign key (subID) references subscribers(id));" +
+			"create index if not exists pub on pubSub (pubID);" +
+			"create index if not exists sub on pubSub (subID);" +
+			"create index if not exists user on pubSub (userID);")
+}
+func (cp *Crossposter) updateTimeStamp(id int64, newTimeStamp int64) {
+	cp.ps.updateTimeStamp(id, newTimeStamp)
+	_, err := cp.dbUpdateStmt.Exec(newTimeStamp, id)
+	if err != nil {
+		log.Printf("Failed to update db for publisher %d and lastPost %d:\n%s\n", id, newTimeStamp, err.Error())
+	}
+}
+func openDB(dbName string) (*sql.DB, error) {
+
+	if _, err := os.Stat(dbName); errors.Is(err, os.ErrNotExist) {
+		_, err := os.Create(dbName)
+		if err != nil {
+			return nil, fmt.Errorf("openDB: couldn't create database file%s:\n%w", dbName, err)
+		}
+	}
+	db, err := sql.Open("sqlite3", dbName)
+	if err != nil {
+		return nil, fmt.Errorf("openDB: couldn't open database file %s:\n%w", dbName, err)
+	}
+	if err = db.Ping(); err != nil {
+		return nil, fmt.Errorf("openDB: couldn't connect to database:\n" + err.Error())
+	}
+	log.Printf("Opened database %s successfully\n", dbName)
+
+	return db, nil
+}
+func (cp *Crossposter) prepareStatements() error {
+	var err error
+
+	cp.dbSelectStmt, err =
+		cp.db.Prepare("select pubSubID, pubID, subID from pubSub where userID=?;")
+
+	if err != nil {
+		return fmt.Errorf("failed to prepare insert statement:\n%w", err)
+	}
+	cp.dbDelStmt, err =
+		cp.db.Prepare("delete from pubSub where userID=? and pubSubID=?;")
+	if err != nil {
+		return fmt.Errorf("failed to prepare count statement:\n%w", err)
+	}
+	cp.dbFindPubSubStmt, err =
+		cp.db.Prepare("select pubID, subID from pubSub where pubSubID=? and userID=?;")
+	if err != nil {
+		return fmt.Errorf("failed to prepare find statement:\n%w", err)
+	}
+	cp.dbSelectAllStmt, err =
+		cp.db.Prepare("select * from pubSub;")
+	if err != nil {
+		return fmt.Errorf("failed to prepare select all statement:\n%w", err)
+	}
+	cp.dbUpdateStmt, err =
+		cp.db.Prepare("update publishers set lastPost=? where id=?")
+	if err != nil {
+		return fmt.Errorf("failed to prepare update statement:\n%w", err)
+	}
+	cp.dbReadPubsStmt, err = cp.db.Prepare("select id, lastPost from publishers;")
+	if err != nil {
+		return fmt.Errorf("failed to prepare read statement:\n%w", err)
+	}
+	cp.dbReadSubsStmt, err = cp.db.Prepare("select id from subscribers;")
+	if err != nil {
+		return fmt.Errorf("failed to prepare read statement:\n%w", err)
+	}
+	return nil
+}
+func (cp *Crossposter) initDB() error {
+	var err error
+	cp.db, err = openDB(cp.dbName)
+	if err != nil {
+		return err
+	}
+	_, err = createTableIfNotExists(cp.db)
+	if err != nil {
+		return fmt.Errorf("initDB: failed to createTableIfNotExists:\n%w", err)
+	}
+	err = cp.prepareStatements()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+func (cp *Crossposter) readDB() error {
+	rows, err := cp.dbReadPubsStmt.Query()
+	if err != nil {
+		return err
+	}
+	var id, lastPost int64
+	for rows.Next() {
+		err = rows.Scan(&id, &lastPost)
+		if err != nil {
+			return err
+		}
+		cp.ps.addPublisher(id, vkSource{lastPost: lastPost, subs: make(subscribersMap)})
+	}
+	rows, err = cp.dbReadSubsStmt.Query()
+	for rows.Next() {
+		err = rows.Scan(&id)
+		if err != nil {
+			return err
+		}
+		id := id
+		cp.ps.addSubscriber(id, func(ch <-chan update) {
+			cp.listenAndForward(ch, id)
+		})
+	}
+	rows, err = cp.dbSelectAllStmt.Query()
+	if err != nil {
+		return err
+	}
+
+	for rows.Next() {
+		var ps pubSubData
+		var rowID int64
+		err = rows.Scan(&rowID, &ps.userID, &ps.pubID, &ps.subID, &ps.flags)
+		if err != nil {
+			return err
+		}
+		cp.ps.subscribeSimple(ps.subID, ps.pubID, ps.flags)
+	}
+	return nil
+}
+func (cp *Crossposter) setHandlers() {
+	cp.tgBot.Handle(reqSubscribe, func(c tele.Context) error {
+		return cp.handleAdd(c)
+	})
+	cp.tgBot.Handle(reqHelp, func(c tele.Context) error {
+		return cp.handleHelp(c)
+	})
+	cp.tgBot.Handle(reqShowSubs, func(c tele.Context) error {
+		return cp.handleShow(c)
+	})
+	cp.tgBot.Handle(reqUnsubscribe, func(c tele.Context) error {
+		return cp.handleDel(c)
+	})
+	cp.tgBot.Handle(reqStart, func(c tele.Context) error {
+		return cp.handleHelp(c)
+	})
+
+}
+func NewCrossposter(cfg CrossposterConfig) (*Crossposter, error) {
+	cp := &Crossposter{}
+	cp.vk = vkApi.NewVK(cfg.VkToken)
+	cp.vkAudio = vkApi.NewVK(cfg.VkAudioToken)
+	cp.vkAudio.UserAgent = kateUserAgent
+	if cfg.UpdatePeriod < 1 {
+		log.Printf("Polling interval not provided, using three minutes\n")
+		cp.updatePeriod = time.Minute * 3
+	} else {
+		cp.updatePeriod = time.Minute * time.Duration(cfg.UpdatePeriod)
+	}
+	var err error
+	cp.tgBot, err = tele.NewBot(tele.Settings{
+		Token:     cfg.TgToken,
+		Poller:    &tele.LongPoller{Timeout: 10 * time.Second},
+		ParseMode: "HTML",
+		OnError:   handleErrors,
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("NewCrossposter: failed to build telegram bot:\n%w", err)
+	}
+	cp.setHandlers()
+	cp.addMsgRegex = regexp.MustCompile(regexAddSub)
+	cp.delMsgRegex = regexp.MustCompile(regexDelSub)
+
+	cp.dbName = cfg.DbName
+	err = cp.initDB()
+	if err != nil {
+		return nil, fmt.Errorf("NewCrossposter: failed to init DB:\n%w", err)
+	}
+
+	cp.chDone = make(chan bool)
+	cp.ps.pubToSub = make(map[int64]vkSource)
+	cp.ps.subToPub = make(map[int64]subscriber)
+	err = cp.readDB()
+	if err != nil {
+		return nil, fmt.Errorf("Failed to read db:\n%w", err)
+	}
+	cp.vkIdCache = NewCacheMap[int64, resolvedVkId](1000)
+	return cp, nil
+}
+func (cp *Crossposter) Start() {
+
+	go cp.startCrossposting()
+	cp.tgBot.Start()
+}
+func (cp *Crossposter) Stop() {
+	log.Printf("Shutting down, please wait\n")
+	cp.tgBot.Stop()
+	log.Printf("Stopped Telegram bot\n")
+	cp.db.Close()
+	log.Printf("Closed db connection, waiting for workers to finish\n")
+	cp.chDone <- true
+	cp.ps.stopPubSub()
+	log.Printf("Finished\n")
+}
