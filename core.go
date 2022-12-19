@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	vkApi "github.com/SevereCloud/vksdk/v2/api"
@@ -98,6 +99,7 @@ type Crossposter struct {
 	delMsgRegex      *regexp.Regexp
 	chDone           chan bool
 	ps               pubsub
+	wg               sync.WaitGroup
 }
 
 type pubSubData struct {
@@ -670,5 +672,6 @@ func (cp *Crossposter) Stop() {
 	log.Printf("Closed db connection, waiting for workers to finish\n")
 	cp.chDone <- true
 	cp.ps.stopPubSub()
+	cp.wg.Wait()
 	log.Printf("Finished\n")
 }

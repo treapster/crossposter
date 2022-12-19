@@ -297,11 +297,13 @@ func (cp *Crossposter) forwardPost(post *preparedPost, chatID int64, flags uint6
 
 }
 func (cp *Crossposter) listenAndForward(upd <-chan update, chatID int64) {
+	cp.wg.Add(1)
 	for update := range upd {
 		for i := range update.posts {
 			cp.forwardPost(&update.posts[i], chatID, uint64(update.flags))
 		}
 	}
+	cp.wg.Done()
 }
 func (cp *Crossposter) prepareCopyHistory(post vkObject.WallWallpost) []preparedPost {
 	res := make([]preparedPost, 0, len(post.CopyHistory))
@@ -372,7 +374,6 @@ func (cp *Crossposter) processBatch(batch []vkReqData) {
 func (cp *Crossposter) startCrossposting() {
 	batch := make([]vkReqData, 0, batchSize)
 	for {
-
 		cp.ps.mu.RLock()
 		for id, pub := range cp.ps.pubToSub {
 			batch = append(batch, vkReqData{
