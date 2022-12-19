@@ -218,7 +218,8 @@ func (cp *Crossposter) sendText(text []rune, link postLink, chat int64) *tele.Me
 			msgLen = len(text)
 			appendedLink = true
 		}
-		msg, err := cp.tgBot.Send(tele.ChatID(chat), string(text[0:msgLen]), &opts)
+		var err error
+		msg, err = cp.tgBot.Send(tele.ChatID(chat), string(text[0:msgLen]), &opts)
 		if err != nil {
 			log.Printf("Failed to send msg for post %s:\n%s\n", link.rawPostLink, err.Error())
 		}
