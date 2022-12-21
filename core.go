@@ -349,9 +349,11 @@ func (cp *Crossposter) handleDel(c tele.Context) error {
 	}
 
 	rows.Close()
-	_, err = cp.db.Exec("delete from pubSub where userID=? and pubSubID=?;"+
+	_, err = cp.db.Exec("begin transaction;"+
+		"delete from pubSub where userID=? and pubSubID=?;"+
 		"delete from publishers where id not in (select pubID from pubSub);"+
-		"delete from subscribers where id not in (select subID from pubSub);", c.Sender().ID, pubSubID, pubID)
+		"delete from subscribers where id not in (select subID from pubSub);"+
+		"commit;", c.Sender().ID, pubSubID, pubID)
 	if err != nil {
 		return err
 	}
@@ -404,11 +406,12 @@ func (cp *Crossposter) handleAdd(c tele.Context) error {
 		lastPost: 0,
 	}
 
-	// TODO: convert this and corresponding delete query to transaction
 	_, err = cp.db.Exec(
-		"insert or ignore into publishers (id, lastPost) values(?,(select strftime('%s')));"+
+		"begin transaction;"+
+			"insert or ignore into publishers (id, lastPost) values(?,(select strftime('%s')));"+
 			"insert or ignore into subscribers (id, flags) values(?, ?);"+
-			"insert into pubSub (userID, pubID, subID, flags) values (?, ?, ?, ?);",
+			"insert into pubSub (userID, pubID, subID, flags) values (?, ?, ?, ?);"+
+			"commit;",
 		res.pubID, res.subID, flags, user, res.pubID, res.subID, flags)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
