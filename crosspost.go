@@ -305,25 +305,7 @@ func (cp *Crossposter) listenAndForward(upd <-chan update, chatID int64) {
 	}
 	cp.wg.Done()
 }
-func (cp *Crossposter) prepareCopyHistory(post vkObject.WallWallpost) []preparedPost {
-	res := make([]preparedPost, 0, len(post.CopyHistory))
-	// we reverse copy history so in preparedPost slice it is ordered by time
 
-	for i := len(post.CopyHistory) - 1; i >= 0; i-- {
-		if len(post.CopyHistory[i].Attachments) == 0 && post.CopyHistory[i].Text == "" {
-			continue
-		}
-		res = append(res, preparedPost{
-			att:         cp.getAttachments(&post.CopyHistory[i]),
-			text:        post.CopyHistory[i].Text,
-			copyHistory: nil,
-			ID:          post.CopyHistory[i].ID,
-			ownerID:     post.CopyHistory[i].OwnerID,
-			Link:        cp.makeLinkToPost(&post.CopyHistory[i]),
-		})
-	}
-	return res
-}
 func (cp *Crossposter) makeLinkToPost(post *vkObject.WallWallpost) postLink {
 
 	ownerData, _ := cp.resolveVkId(int64(post.OwnerID))
@@ -338,19 +320,24 @@ func (cp *Crossposter) makeLinkToPost(post *vkObject.WallWallpost) postLink {
 		postLinkLen,
 	}
 }
-
-func (cp *Crossposter) preparePosts(posts []vkObject.WallWallpost) []preparedPost {
+func (cp *Crossposter) preparePosts(posts []vkObject.WallWallpost, HandleReposts bool) []preparedPost {
 	res := make([]preparedPost, 0, len(posts))
 	for i := len(posts) - 1; i >= 0; i-- {
-		if posts[i].MarkedAsAds {
+		// We only skip ads if they're not intentionally reposted.
+		// For reposts HandleReposts is false, so the ads will be
+		// handled as ordinary posts.
+		if bool(posts[i].MarkedAsAds) && HandleReposts {
 			continue
 		}
+
+		var copyHistory []preparedPost = nil
+		if HandleReposts {
+			copyHistory = cp.preparePosts(posts[i].CopyHistory, false)
+		}
 		res = append(res, preparedPost{
-			att:  cp.getAttachments(&posts[i]),
-			text: posts[i].Text,
-			// we don't call ourselves recursively because we don't want to repeat the same copy history
-			// for every repost, so we call prepareCopyHistory once per actual post
-			copyHistory: cp.prepareCopyHistory(posts[i]),
+			att:         cp.getAttachments(&posts[i]),
+			text:        posts[i].Text,
+			copyHistory: copyHistory,
 			ID:          posts[i].ID,
 			ownerID:     posts[i].OwnerID,
 			Link:        cp.makeLinkToPost(&posts[i]),
@@ -358,6 +345,7 @@ func (cp *Crossposter) preparePosts(posts []vkObject.WallWallpost) []preparedPos
 	}
 	return res
 }
+
 func (cp *Crossposter) processBatch(batch []vkReqData) {
 	var res []vkReqResult
 	err := cp.vk.Execute(makeJs(batch, updatePostCount), &res)
@@ -366,7 +354,7 @@ func (cp *Crossposter) processBatch(batch []vkReqData) {
 	} else {
 		for i := range res {
 			cp.updateTimeStamp(res[i].Id, res[i].LastPost)
-			cp.ps.publish(res[i].Id, cp.preparePosts(res[i].Posts))
+			cp.ps.publish(res[i].Id, cp.preparePosts(res[i].Posts, true /*HandleReposts*/))
 		}
 	}
 }
