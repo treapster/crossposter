@@ -93,17 +93,22 @@ func (cp *Crossposter) getAudio(audioIds []string) []tele.Inputtable {
 		return nil
 	}
 	res := []tele.Inputtable{}
-	for _, a := range vkRes {
-		r, err := http.Get(a.Url)
-		if err != nil {
-			log.Printf("Failed to get audio from url\n%s\n", err.Error())
-			continue
+	for i, a := range vkRes {
+		if a.Url != "" {
+			r, err := http.Get(a.Url)
+			if err != nil {
+				log.Printf("Failed to get audio from url %s\n%s\n", a.Url, err.Error())
+				continue
+			}
+			res = append(res, &tele.Audio{
+				File:      tele.FromReader(r.Body),
+				Title:     a.Title,
+				Performer: a.Performer,
+			})
+		} else {
+			log.Printf("Failed to get audio %s\n", audioIds[i])
 		}
-		res = append(res, &tele.Audio{
-			File:      tele.FromReader(r.Body),
-			Title:     a.Title,
-			Performer: a.Performer,
-		})
+
 	}
 	return res
 }
