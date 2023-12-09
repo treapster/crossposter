@@ -26,7 +26,7 @@ func main() {
 	}
 
 	go cp.Start()
-	log.Printf("Bot Started\n")
+	log.Printf("Bot Started, enter q to stop\n")
 	var input string
 	for {
 		fmt.Scanf("%s", &input)
