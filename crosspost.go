@@ -17,8 +17,7 @@ import (
 )
 
 const (
-	updatePostCount = 30
-	maxVidDuration  = 102 // because 720p is below 50 MB(telegram limit) for up to 102 seconds
+	maxVidDuration = 102 // because 720p is below 50 MB(telegram limit) for up to 102 seconds
 	// bigger videos are posted via link
 )
 const (
@@ -352,7 +351,7 @@ func (cp *Crossposter) preparePosts(posts []vkObject.WallWallpost, HandleReposts
 
 func (cp *Crossposter) processBatch(batch []vkReqData) {
 	var res []vkReqResult
-	err := cp.vk.Execute(makeJs(batch, updatePostCount), &res)
+	err := cp.vk.Execute(makeJs(batch, cp.nPostsToFetch), &res)
 	if err != nil {
 		log.Printf("Failed to execute:\n%s\n", err.Error())
 	} else {

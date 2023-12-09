@@ -74,6 +74,13 @@ type CrossposterConfig struct {
 	// 20 is max supported by vk API, in practice 13 or more can
 	// hit the limit. I use 12.
 	BatchSize int
+
+	// How many latest posts are fetched through wall.get for each page.
+	// 100 is max allowed by vkAPI.
+	// Only the new ones are returned, so for small update periods (<10 mins)
+	// fetching a couple dozen will be enough, unless the page makes several
+	// posts a minute.
+	NPostsToFetch int
 }
 
 type resolvedVkId struct {
@@ -106,6 +113,7 @@ type Crossposter struct {
 	ps               pubsub
 	wg               sync.WaitGroup
 	batchSize        int
+	nPostsToFetch    int
 }
 
 type pubSubData struct {
@@ -641,6 +649,12 @@ func NewCrossposter(cfg CrossposterConfig) (*Crossposter, error) {
 		return nil, fmt.Errorf("BatchSize not provided\n")
 	}
 	cp.batchSize = cfg.BatchSize
+
+	if cfg.NPostsToFetch < 1 {
+		return nil, fmt.Errorf("NPostsToFetch not provided\n")
+	}
+	cp.nPostsToFetch = cfg.NPostsToFetch
+
 	var err error
 	cp.tgBot, err = tele.NewBot(tele.Settings{
 		Token:     cfg.TgToken,
