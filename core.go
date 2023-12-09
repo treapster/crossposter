@@ -69,6 +69,11 @@ type CrossposterConfig struct {
 	TgToken      string
 	DbName       string
 	UpdatePeriod int64
+
+	// How many vk pages are checked for updates in one query.
+	// 20 is max supported by vk API, in practice 13 or more can
+	// hit the limit. I use 12.
+	BatchSize int
 }
 
 type resolvedVkId struct {
@@ -100,6 +105,7 @@ type Crossposter struct {
 	chDone           chan bool
 	ps               pubsub
 	wg               sync.WaitGroup
+	batchSize        int
 }
 
 type pubSubData struct {
@@ -631,6 +637,10 @@ func NewCrossposter(cfg CrossposterConfig) (*Crossposter, error) {
 	} else {
 		cp.updatePeriod = time.Minute * time.Duration(cfg.UpdatePeriod)
 	}
+	if cfg.BatchSize < 1 {
+		return nil, fmt.Errorf("BatchSize not provided\n")
+	}
+	cp.batchSize = cfg.BatchSize
 	var err error
 	cp.tgBot, err = tele.NewBot(tele.Settings{
 		Token:     cfg.TgToken,

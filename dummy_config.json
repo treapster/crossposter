@@ -4,5 +4,6 @@
     "VkApiVersion": "5.131",
     "TgToken": "",
     "DbName": "./crossposter.db",
-    "UpdatePeriod": 5
+    "UpdatePeriod": 5,
+    "BatchSize": 12
 }

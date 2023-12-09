@@ -17,7 +17,6 @@ import (
 )
 
 const (
-	batchSize       = 20
 	updatePostCount = 30
 	maxVidDuration  = 102 // because 720p is below 50 MB(telegram limit) for up to 102 seconds
 	// bigger videos are posted via link
@@ -365,7 +364,7 @@ func (cp *Crossposter) processBatch(batch []vkReqData) {
 }
 
 func (cp *Crossposter) startCrossposting() {
-	batch := make([]vkReqData, 0, batchSize)
+	batch := make([]vkReqData, 0, cp.batchSize)
 	for {
 		cp.ps.mu.RLock()
 		for id, pub := range cp.ps.pubToSub {
@@ -373,7 +372,7 @@ func (cp *Crossposter) startCrossposting() {
 				id,
 				pub.lastPost,
 			})
-			if len(batch)%batchSize == 0 {
+			if len(batch)%cp.batchSize == 0 {
 				cp.ps.mu.RUnlock()
 				cp.processBatch(batch)
 				cp.ps.mu.RLock()
