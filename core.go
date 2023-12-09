@@ -410,7 +410,7 @@ func (cp *Crossposter) handleAdd(c tele.Context) error {
 		"begin transaction;"+
 			"insert or ignore into publishers (id, lastPost) values(?,(select strftime('%s')));"+
 			"insert or ignore into subscribers (id, flags) values(?, ?);"+
-			"insert into pubSub (userID, pubID, subID, flags) values (?, ?, ?, ?);"+
+			"insert or rollback into pubSub (userID, pubID, subID, flags) values (?, ?, ?, ?);"+
 			"commit;",
 		res.pubID, res.subID, flags, user, res.pubID, res.subID, flags)
 	if err != nil {
