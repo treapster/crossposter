@@ -68,6 +68,14 @@ type CrossposterConfig struct {
 	VkApiVersion string
 	TgToken      string
 	DbName       string
+
+	// Time in minutes between requests for updates to vk.
+	// It is an upper bound on how much time will pass between a post
+	// appearing on VK page and the bot picking it up and sending
+	// in telegram. The more pages the bot tracks, the more time it will need
+	// to process all updates because it needs to avoid api limits and sleep
+	// between requests. I think you can start at 3-5 minutes, but as you get more
+	// users and followed pages, you may need to increase it.
 	UpdatePeriod int64
 
 	// How many vk pages are checked for updates in one query.
@@ -640,11 +648,9 @@ func NewCrossposter(cfg CrossposterConfig) (*Crossposter, error) {
 	cp.vkAudio = vkApi.NewVK(cfg.VkAudioToken)
 	cp.vkAudio.UserAgent = kateUserAgent
 	if cfg.UpdatePeriod < 1 {
-		log.Printf("Polling interval not provided, using three minutes\n")
-		cp.updatePeriod = time.Minute * 3
-	} else {
-		cp.updatePeriod = time.Minute * time.Duration(cfg.UpdatePeriod)
+		return nil, fmt.Errorf("UpdatePeriod not provided\n")
 	}
+	cp.updatePeriod = time.Minute * time.Duration(cfg.UpdatePeriod)
 	if cfg.BatchSize < 1 {
 		return nil, fmt.Errorf("BatchSize not provided\n")
 	}
