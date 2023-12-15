@@ -5,6 +5,7 @@ package main
 
 import (
 	"fmt"
+	"html"
 	"log"
 	"net/http"
 	"strconv"
@@ -339,7 +340,7 @@ func (cp *Crossposter) preparePosts(posts []vkObject.WallWallpost, HandleReposts
 		}
 		res = append(res, preparedPost{
 			att:         cp.getAttachments(&posts[i]),
-			text:        posts[i].Text,
+			text:        html.EscapeString(posts[i].Text),
 			copyHistory: copyHistory,
 			ID:          posts[i].ID,
 			ownerID:     posts[i].OwnerID,
