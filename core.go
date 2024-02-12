@@ -684,7 +684,7 @@ func NewCrossposter(cfg CrossposterConfig) (*Crossposter, error) {
 
 	cp.chDone = make(chan bool)
 	cp.ps.pubToSub = make(map[int64]vkSource)
-	cp.ps.subToPub = make(map[int64]subscriber)
+	cp.ps.subscribers = make(map[int64]subscriber)
 	err = cp.readDB()
 	if err != nil {
 		return nil, fmt.Errorf("Failed to read db:\n%w", err)
