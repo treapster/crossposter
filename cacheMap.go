@@ -29,6 +29,7 @@ func (m *CacheMap[KeyType, ValueType]) Put(id KeyType, data ValueType) {
 	}
 	m.first = m.second
 	m.second = make(map[KeyType]ValueType, m.size)
+	m.second[id] = data
 }
 
 func (m *CacheMap[KeyType, ValueType]) Get(id KeyType) (ValueType, bool) {
