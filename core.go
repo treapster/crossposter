@@ -649,16 +649,16 @@ func NewCrossposter(cfg CrossposterConfig) (*Crossposter, error) {
 	cp.vkAudio = vkApi.NewVK(cfg.VkAudioToken)
 	cp.vkAudio.UserAgent = kateUserAgent
 	if cfg.UpdatePeriod < 1 {
-		return nil, fmt.Errorf("UpdatePeriod not provided\n")
+		return nil, fmt.Errorf("UpdatePeriod not provided")
 	}
 	cp.updatePeriod = time.Minute * time.Duration(cfg.UpdatePeriod)
 	if cfg.BatchSize < 1 {
-		return nil, fmt.Errorf("BatchSize not provided\n")
+		return nil, fmt.Errorf("BatchSize not provided")
 	}
 	cp.batchSize = cfg.BatchSize
 
 	if cfg.NPostsToFetch < 1 {
-		return nil, fmt.Errorf("NPostsToFetch not provided\n")
+		return nil, fmt.Errorf("NPostsToFetch not provided")
 	}
 	cp.nPostsToFetch = cfg.NPostsToFetch
 
