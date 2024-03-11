@@ -151,18 +151,7 @@ func (cp *Crossposter) getVideo(videoIds []string) ([]tele.Inputtable, []string)
 	}
 	return res, resLinks
 }
-func (cp *Crossposter) getVideos(post *vkObject.WallWallpost) []string {
-	res := []string{}
-	videoIds := []string{}
-	for _, att := range post.Attachments {
-		switch att.Type {
-		case "video":
-			videoIds = append(videoIds, strconv.Itoa(att.Video.OwnerID)+"_"+strconv.Itoa(att.Video.ID))
-		}
-	}
 
-	return res
-}
 func (cp *Crossposter) getAttachments(post *vkObject.WallWallpost) preparedAttachments {
 
 	// because telegram album contains either photo/video or audio or documents, we separate them
@@ -191,10 +180,9 @@ func (cp *Crossposter) getAttachments(post *vkObject.WallWallpost) preparedAttac
 	if len(audioIds) > 0 {
 		res.media["audio"] = cp.getAudio(audioIds)
 	}
-	links := []string{}
-	vids := []tele.Inputtable{}
+
 	if len(videoIds) > 0 {
-		vids, links = cp.getVideo(videoIds)
+		vids, links := cp.getVideo(videoIds)
 		if len(vids) > 0 {
 			res.media["photo/video"] = append(res.media["photo/video"], vids...)
 		}
@@ -277,7 +265,7 @@ func (cp *Crossposter) sendWithAttachments(text []rune, link postLink, id int64,
 	return opts.ReplyTo
 }
 
-func (cp *Crossposter) forwardSinglePost(post *preparedPost, flags uint64, isRepost bool, chatID int64) *tele.Message {
+func (cp *Crossposter) forwardSinglePost(post *preparedPost, flags uint64, chatID int64) *tele.Message {
 
 	link := post.Link
 	if flags&flagAddLinkToPost == 0 {
@@ -295,9 +283,9 @@ func (cp *Crossposter) forwardSinglePost(post *preparedPost, flags uint64, isRep
 func (cp *Crossposter) forwardPost(post *preparedPost, chatID int64, flags uint64) {
 	var opts tele.SendOptions
 	for i := range post.copyHistory {
-		opts.ReplyTo = cp.forwardSinglePost(&post.copyHistory[i], flags, true, chatID)
+		opts.ReplyTo = cp.forwardSinglePost(&post.copyHistory[i], flags, chatID)
 	}
-	cp.forwardSinglePost(post, flags, false, chatID)
+	cp.forwardSinglePost(post, flags, chatID)
 
 }
 func (cp *Crossposter) listenAndForward(upd <-chan update, chatID int64) {

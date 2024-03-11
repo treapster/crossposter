@@ -8,8 +8,8 @@ import (
 type subscriber struct {
 	feed      chan update
 	subsCount int32
-	flags     uint64
 }
+
 type subscribersMap = map[int64]uint64
 type vkSource struct {
 	lastPost int64
