@@ -82,8 +82,11 @@ func makeObjects(batch []vkReqData) string {
 
 func (cp *Crossposter) getAudio(audioIds []string) []tele.Inputtable {
 
+	res := []tele.Inputtable{}
+	if len(audioIds) == 0 {
+		return res
+	}
 	vkRes := []vkAudio{}
-
 	err := cp.vkAudio.RequestUnmarshal("audio.getById", &vkRes, vkApi.Params{
 		"audios": strings.Join(audioIds, ","),
 	})
@@ -91,7 +94,7 @@ func (cp *Crossposter) getAudio(audioIds []string) []tele.Inputtable {
 		log.Printf("Failed to get audio:\n%s\n", err.Error())
 		return nil
 	}
-	res := []tele.Inputtable{}
+
 	for i, a := range vkRes {
 		if a.Url != "" {
 			r, err := http.Get(a.Url)
@@ -177,8 +180,16 @@ func (cp *Crossposter) getAttachments(post *vkObject.WallWallpost) preparedAttac
 			videoIds = append(videoIds, vID)
 		}
 	}
-	if len(audioIds) > 0 {
-		res.media["audio"] = cp.getAudio(audioIds)
+
+	audio := cp.getAudio(audioIds)
+
+	if len(audio) < len(audioIds) {
+		log.Printf("Only got %d/%d audios for %s\n", len(audio),
+			len(audioIds), fmt.Sprintf("https://vk.com/wall%d_%d", post.OwnerID, post.ID))
+	}
+
+	if len(audio) > 0 {
+		res.media["audio"] = audio
 	}
 
 	if len(videoIds) > 0 {
@@ -249,7 +260,7 @@ func (cp *Crossposter) sendWithAttachments(text []rune, link postLink, id int64,
 	for mediaType := range att.media {
 		msg, err := cp.tgBot.SendAlbum(tele.ChatID(id), att.media[mediaType], string(text), &opts)
 		if err != nil {
-			log.Printf("Failed to send msg:\n%s\n", err.Error())
+			log.Printf("Failed to send msg for post %s:\n%s\n", link.rawPostLink, err.Error())
 			return nil
 		}
 
