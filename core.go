@@ -208,7 +208,8 @@ func (cp *Crossposter) resolveVkId(id int64) (resolvedVkId, error) {
 	}
 	var err error
 	if id > 0 {
-		usr, err := cp.vk.UsersGet(vkApi.Params{
+		var usr vkApi.UsersGetResponse
+		usr, err = cp.vk.UsersGet(vkApi.Params{
 			"user_ids": id,
 			"fields":   "screen_name",
 			"lang":     "ru",
@@ -219,7 +220,8 @@ func (cp *Crossposter) resolveVkId(id int64) (resolvedVkId, error) {
 			return res, nil
 		}
 	} else {
-		group, err := cp.vk.GroupsGetByID(vkApi.Params{
+		var group vkApi.GroupsGetByIDResponse
+		group, err = cp.vk.GroupsGetByID(vkApi.Params{
 			"group_ids": -id,
 		})
 		if err == nil && len(group) > 0 {
