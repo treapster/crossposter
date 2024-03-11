@@ -303,7 +303,7 @@ func (cp *Crossposter) resolveVkName(name string) (int64, error) {
 			"user_ids": id,
 		})
 		if err == nil && len(res) > 0 {
-			if res[0].IsClosed == false && res[0].Deactivated == "" {
+			if !res[0].IsClosed && res[0].Deactivated == "" {
 				return id, nil
 			}
 			return 0, userError{code: errUserPrivate, vkUserOrGroup: name}
