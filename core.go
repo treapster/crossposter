@@ -601,6 +601,9 @@ func (cp *Crossposter) readDB() error {
 		cp.ps.addPublisher(id, vkSource{lastPost: lastPost, subs: make(subscribersMap)})
 	}
 	rows, err = cp.dbReadSubsStmt.Query()
+	if err != nil {
+		return err
+	}
 	for rows.Next() {
 		err = rows.Scan(&id)
 		if err != nil {
