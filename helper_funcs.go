@@ -5,6 +5,7 @@ import (
 	"math/rand"
 	"strconv"
 	"strings"
+	"time"
 
 	vkObject "github.com/SevereCloud/vksdk/v2/object"
 )
@@ -104,4 +105,15 @@ func findIndexToCut(text []rune, target int) int {
 		return target
 	}
 	return res
+}
+
+// Return a random time in the range (n - 1), (n + 1) days.
+// used to determinne vk-id-to-name cache entry lifetime.
+// Randomness is added to avoid bulk invalidations
+// at the same time which could lead to exceeding vk api limits
+func approxNDaysFromNow(n int) int64 {
+	var secsInDay int64 = 24 * 60 * 60
+	nDaysFromNow := time.Now().Unix() + int64(n)*secsInDay
+	varSecs := (rand.Int63() % (2 * secsInDay)) - secsInDay
+	return nDaysFromNow + varSecs
 }

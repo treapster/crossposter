@@ -202,6 +202,7 @@ func (cp *Crossposter) isUserAdmin(user int64, chat int64) bool {
 	return false
 }
 func (cp *Crossposter) resolveVkId(id int64) (resolvedVkId, error) {
+	const vkIdCacheValidDays = 2
 	if res, e := cp.vkIdCache.Get(id); e {
 		return res, nil
 	}
@@ -214,7 +215,7 @@ func (cp *Crossposter) resolveVkId(id int64) (resolvedVkId, error) {
 		})
 		if err == nil && len(usr) > 0 {
 			res := resolvedVkId{usr[0].ScreenName, usr[0].FirstName + " " + usr[0].LastName}
-			cp.vkIdCache.Put(id, res)
+			cp.vkIdCache.Put(id, res, approxNDaysFromNow(vkIdCacheValidDays))
 			return res, nil
 		}
 	} else {
@@ -223,7 +224,7 @@ func (cp *Crossposter) resolveVkId(id int64) (resolvedVkId, error) {
 		})
 		if err == nil && len(group) > 0 {
 			res := resolvedVkId{group[0].ScreenName, group[0].Name}
-			cp.vkIdCache.Put(id, res)
+			cp.vkIdCache.Put(id, res, approxNDaysFromNow(vkIdCacheValidDays))
 			return res, nil
 		}
 	}
