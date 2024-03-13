@@ -421,23 +421,23 @@ func (cp *Crossposter) handleAdd(c tele.Context) error {
 		return err
 	}
 	var tgId int64
-	user := c.Sender().ID
+	userID := c.Sender().ID
 	lang := getLang(c)
 	if tgName == "me" {
-		tgId = user
+		tgId = userID
 		tgName = c.Sender().FirstName + c.Sender().LastName
 	} else {
 		tgId, err = cp.ResolveTgName(tgName)
 		if err != nil {
 			return userError{code: errNoSuchChannel, tgUserOrGroup: tgName}
 		}
-		if !cp.isUserAdmin(user, tgId) {
+		if !cp.isUserAdmin(userID, tgId) {
 			return userError{code: errUserNotAdmin} // this return is a single thing that prevents users from messing each other's subscriptions
 		}
 	}
 
 	res := pubSubData{
-		userID:   user,
+		userID:   userID,
 		pubID:    vkId,
 		subID:    tgId,
 		lastPost: 0,
@@ -449,7 +449,7 @@ func (cp *Crossposter) handleAdd(c tele.Context) error {
 			"insert or ignore into subscribers (id, flags) values(?, ?);"+
 			"insert or rollback into pubSub (userID, pubID, subID, flags) values (?, ?, ?, ?);"+
 			"commit;",
-		res.pubID, res.subID, flags, user, res.pubID, res.subID, flags)
+		res.pubID, res.subID, flags, userID, res.pubID, res.subID, flags)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
 			return userError{code: errAlreadySubscribed,
