@@ -32,6 +32,7 @@ type botReplies struct {
 	noSubs            string
 	notAdmin          string
 	alreadySubscribed string
+	subsLimitReached  string
 }
 
 var i18n = map[string]botReplies{
@@ -59,6 +60,7 @@ var i18n = map[string]botReplies{
 		delSuccess:        "Подписка %d успешно удалена",
 		noSubs:            "Список каналов пуст",
 		notAdmin:          "Как минимум одному из нас не хватает прав администратора этого чата. Они должны быть у нас обоих.",
+		subsLimitReached:  "Достигнут лимит в %d подписок для одного пользователя.",
 	},
 }
 
@@ -89,6 +91,9 @@ type CrossposterConfig struct {
 	// fetching a couple dozen will be enough, unless the page makes several
 	// posts a minute.
 	NPostsToFetch int
+
+	// Max subscriptions per user
+	SubsLimit int
 }
 
 type resolvedVkId struct {
@@ -122,6 +127,7 @@ type Crossposter struct {
 	wg               sync.WaitGroup
 	batchSize        int
 	nPostsToFetch    int
+	subsLimit        int
 }
 
 type pubSubData struct {
@@ -145,6 +151,7 @@ type userError struct {
 	code          int
 	vkUserOrGroup string
 	tgUserOrGroup string
+	subsLimit     int
 }
 
 const (
@@ -158,7 +165,9 @@ const (
 	errNoSubs
 	errNoSuchSub
 	errAlreadySubscribed
+	errSubsLimitReached
 )
+
 const (
 	addCommandShowSource = `s`
 
@@ -339,8 +348,11 @@ func handleUserError(err userError, c tele.Context) {
 		c.Send(i18n[lang].noSuchSub)
 	case errAlreadySubscribed:
 		c.Send(fmt.Sprintf(i18n[lang].alreadySubscribed, err.tgUserOrGroup, err.vkUserOrGroup))
+	case errSubsLimitReached:
+		c.Send(fmt.Sprintf(i18n[lang].subsLimitReached, err.subsLimit))
 	}
 }
+
 func handleErrors(err error, c tele.Context) {
 	switch e := err.(type) {
 	case userError:
@@ -445,6 +457,13 @@ func (cp *Crossposter) handleAdd(c tele.Context) error {
 				vkUserOrGroup: vkName,
 			}
 		}
+		if strings.Contains(err.Error(), "too many subscriptions") {
+			return userError{code: errSubsLimitReached,
+				tgUserOrGroup: tgName,
+				vkUserOrGroup: vkName,
+				subsLimit:     cp.subsLimit,
+			}
+		}
 		return err
 	}
 	cp.ps.subscribe(tgId, vkId, flags, func(ch <-chan update) {
@@ -490,8 +509,16 @@ func (cp *Crossposter) handleShow(c tele.Context) error {
 	return c.Send(msg)
 }
 
-func createTableIfNotExists(db *sql.DB) (sql.Result, error) {
-
+func createTableIfNotExists(db *sql.DB, subsLimit int) (sql.Result, error) {
+	trigger := fmt.Sprintf(
+		// remove prev trigger to propagate possible changes to subsLimit
+		// to the database
+		"drop trigger if exists checkSubsCount;\n"+
+			"create trigger checkSubsCount before insert on pubSub\n"+
+			"begin\n"+
+			"select case when (select count(*) from pubsub where userID=NEW.userID) >= %d then raise(ROLLBACK, \"too many subscriptions\") else '' end;\n"+
+			"end;",
+		subsLimit)
 	return db.Exec(
 		"create table if not exists publishers" +
 			"(id integer primary key, lastPost integer);" +
@@ -504,8 +531,10 @@ func createTableIfNotExists(db *sql.DB) (sql.Result, error) {
 			"foreign key (subID) references subscribers(id));" +
 			"create index if not exists pub on pubSub (pubID);" +
 			"create index if not exists sub on pubSub (subID);" +
-			"create index if not exists user on pubSub (userID);")
+			"create index if not exists user on pubSub (userID);" +
+			trigger)
 }
+
 func (cp *Crossposter) updateTimeStamp(id int64, newTimeStamp int64) {
 	cp.ps.updateTimeStamp(id, newTimeStamp)
 	_, err := cp.dbUpdateStmt.Exec(newTimeStamp, id)
@@ -577,7 +606,7 @@ func (cp *Crossposter) initDB() error {
 	if err != nil {
 		return err
 	}
-	_, err = createTableIfNotExists(cp.db)
+	_, err = createTableIfNotExists(cp.db, cp.subsLimit)
 	if err != nil {
 		return fmt.Errorf("initDB: failed to createTableIfNotExists:\n%w", err)
 	}
@@ -648,6 +677,7 @@ func (cp *Crossposter) setHandlers() {
 	})
 
 }
+
 func NewCrossposter(cfg CrossposterConfig) (*Crossposter, error) {
 	cp := &Crossposter{}
 	cp.vk = vkApi.NewVK(cfg.VkToken)
@@ -666,6 +696,11 @@ func NewCrossposter(cfg CrossposterConfig) (*Crossposter, error) {
 		return nil, fmt.Errorf("NPostsToFetch not provided")
 	}
 	cp.nPostsToFetch = cfg.NPostsToFetch
+
+	if cfg.SubsLimit < 1 {
+		return nil, fmt.Errorf("SubsLimit not provided")
+	}
+	cp.subsLimit = cfg.SubsLimit
 
 	var err error
 	cp.tgBot, err = tele.NewBot(tele.Settings{

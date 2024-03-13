@@ -6,5 +6,6 @@
     "DbName": "./crossposter.db",
     "UpdatePeriod": 5,
     "BatchSize": 12,
-    "NPostsToFetch": 30
+    "NPostsToFetch": 30,
+    "SubsLimit": 40
 }
