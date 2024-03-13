@@ -458,6 +458,8 @@ func (cp *Crossposter) handleAdd(c tele.Context) error {
 			}
 		}
 		if strings.Contains(err.Error(), "too many subscriptions") {
+			// log the event so that we know when users want more subscriptions
+			log.Printf("User %d exhausted subscriptions limit and wanted more\n", userID)
 			return userError{code: errSubsLimitReached,
 				tgUserOrGroup: tgName,
 				vkUserOrGroup: vkName,
