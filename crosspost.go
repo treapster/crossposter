@@ -8,6 +8,7 @@ import (
 	"html"
 	"log"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -354,6 +355,14 @@ func (cp *Crossposter) processBatch(batch []vkReqData) {
 	err := cp.vk.Execute(makeJs(batch, cp.nPostsToFetch), &res)
 	if err != nil {
 		log.Printf("Failed to execute:\n%s\n", err.Error())
+		switch e := err.(type) {
+		case *vkApi.ExecuteErrors:
+			for _, exErr := range *e {
+				log.Printf("Method: %s Code: %d Message: %s\n", exErr.Method, exErr.Code, exErr.Msg)
+			}
+		default:
+			log.Println("Unknown error type: ", reflect.TypeOf(err))
+		}
 	} else {
 		for i := range res {
 			cp.updateTimeStamp(res[i].Id, res[i].LastPost)
