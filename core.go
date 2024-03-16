@@ -320,9 +320,10 @@ func (cp *Crossposter) resolveVkName(name string) (int64, error) {
 		id = int64(vkResp.ObjectID)
 		res, err := cp.vk.UsersGet(vkApi.Params{
 			"user_ids": id,
+			"fields":   "can_see_all_posts",
 		})
 		if err == nil && len(res) > 0 {
-			if !res[0].IsClosed && res[0].Deactivated == "" {
+			if !res[0].IsClosed && res[0].Deactivated == "" && res[0].CanSeeAllPosts {
 				return id, nil
 			}
 			return 0, userError{code: errUserPrivate, vkUserOrGroup: name}
