@@ -203,49 +203,56 @@ func (cp *Crossposter) getAttachments(post *vkObject.WallWallpost) preparedAttac
 	return res
 }
 
-func (cp *Crossposter) sendText(text []rune, link postLink, chat int64) *tele.Message {
+func (cp *Crossposter) sendText(text string, link postLink, chat int64) *tele.Message {
+	text = strings.Trim(text, " \t\n")
 	if len(text) == 0 {
 		return nil
 	}
 	if len(text) > 0 && link.postLinkTextLen > 0 {
-		text = append(text, []rune("\n\n")...)
+		text = text + "\n\n"
 	}
 	var opts tele.SendOptions
 	opts.ParseMode = "HTML"
 	var msg *tele.Message
 	appendedLink := false
 	maxMsgSize := 4096
-	for len(text) > 0 || (len([]rune(link.formattedPostLink)) > 0 && !appendedLink) {
-		msgLen := findIndexToCut(text, maxMsgSize)
-		if len(text)+link.postLinkTextLen <= maxMsgSize {
-			text = append(text, []rune(link.formattedPostLink)...)
-			msgLen = len(text)
+	for len(text) > 0 || (len(link.formattedPostLink) > 0 && !appendedLink) {
+		splitIndex, msgLen := findIndexToSplit(text, maxMsgSize)
+
+		msgText := inlineLinkRegex.ReplaceAllString(
+			html.EscapeString(text[0:splitIndex]),
+			"<a href='https://vk.com/$1$2'>$3</a>",
+		)
+		// if text fits in one message, check if it will fit with link too
+		if splitIndex == len(text) && msgLen+link.postLinkTextLen <= maxMsgSize {
+			msgText = msgText + link.formattedPostLink
 			appendedLink = true
 		}
 		var err error
-		msg, err = cp.tgBot.Send(tele.ChatID(chat), string(text[0:msgLen]), &opts)
+		msg, err = cp.tgBot.Send(tele.ChatID(chat), msgText, &opts)
 		if err != nil {
 			log.Printf("Failed to send msg for post %s:\n%s\n", link.rawPostLink, err.Error())
 		}
 		opts.ReplyTo = msg
-		text = text[msgLen:]
+		text = strings.TrimLeft(text[splitIndex:], " \t\n")
 		time.Sleep(time.Second * 3)
 	}
 	return msg
 }
-func (cp *Crossposter) sendWithAttachments(text []rune, link postLink, id int64, att preparedAttachments) *tele.Message {
+func (cp *Crossposter) sendWithAttachments(text string, link postLink, id int64, att preparedAttachments) *tele.Message {
 
 	if len(att.links) != 0 {
-		text = append(text, []rune("\n"+strings.Join(att.links, "\n"))...)
+		text = text + "\n" + strings.Join(att.links, "\n")
 	}
 
 	var opts tele.SendOptions
 	opts.ParseMode = "HTML"
 	maxMsgSize := 1024
-	msgSize := len(text)
+	_, msgSize := findIndexToSplit(text, 999999) // count rendered characters in a text
 	if link.postLinkTextLen > 0 {
 		if msgSize > 0 {
 			msgSize += 2 // two newlines
+			text = text + "\n\n"
 		}
 		msgSize += link.postLinkTextLen
 	}
@@ -253,13 +260,13 @@ func (cp *Crossposter) sendWithAttachments(text []rune, link postLink, id int64,
 		opts.ReplyTo = cp.sendText(text, link, id)
 		text = text[:0]
 	} else {
-		if len(text) > 0 && link.postLinkTextLen > 0 {
-			text = append(text, []rune("\n\n")...)
-		}
-		text = append(text, []rune(link.formattedPostLink)...)
+		text = inlineLinkRegex.ReplaceAllString(
+			html.EscapeString(text),
+			"<a href='https://vk.com/$1$2'>$3</a>") +
+			link.formattedPostLink
 	}
 	for mediaType := range att.media {
-		msg, err := cp.tgBot.SendAlbum(tele.ChatID(id), att.media[mediaType], string(text), &opts)
+		msg, err := cp.tgBot.SendAlbum(tele.ChatID(id), att.media[mediaType], text, &opts)
 		if err != nil {
 			log.Printf("Failed to send msg for post %s:\n%s\n", link.rawPostLink, err.Error())
 			return nil
@@ -286,10 +293,10 @@ func (cp *Crossposter) forwardSinglePost(post *preparedPost, flags uint64, chatI
 	}
 
 	if post.att.Empty() {
-		return cp.sendText([]rune(post.text), link, chatID)
+		return cp.sendText(post.text, link, chatID)
 
 	}
-	return cp.sendWithAttachments([]rune(post.text), link, chatID, post.att)
+	return cp.sendWithAttachments(post.text, link, chatID, post.att)
 }
 
 func (cp *Crossposter) forwardPost(post *preparedPost, chatID int64, flags uint64) {
@@ -324,6 +331,7 @@ func (cp *Crossposter) makeLinkToPost(post *vkObject.WallWallpost) postLink {
 		postLinkLen,
 	}
 }
+
 func (cp *Crossposter) preparePosts(posts []vkObject.WallWallpost, HandleReposts bool) []preparedPost {
 	res := make([]preparedPost, 0, len(posts))
 	for i := len(posts) - 1; i >= 0; i-- {
@@ -340,7 +348,7 @@ func (cp *Crossposter) preparePosts(posts []vkObject.WallWallpost, HandleReposts
 		}
 		res = append(res, preparedPost{
 			att:         cp.getAttachments(&posts[i]),
-			text:        html.EscapeString(posts[i].Text),
+			text:        posts[i].Text,
 			copyHistory: copyHistory,
 			ID:          posts[i].ID,
 			ownerID:     posts[i].OwnerID,

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math/rand"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -90,21 +91,81 @@ func min(a, b int) int {
 func isSeparator(c rune) bool {
 	return c == ' ' || c == '\n' || c == '\t'
 }
-func findIndexToCut(text []rune, target int) int {
-	if len(text) <= target {
-		return len(text)
+
+var inlineLinkRegex *regexp.Regexp = regexp.MustCompile(`\[` +
+	`(?:` +
+	`(?:(?:https?://)?vk\.com/)([a-zA-Z0-9_\-\.\?=]+)` +
+	`|` +
+	`((?:club|id)[0-9]+)` +
+	`)` +
+	`\|` +
+	`([^]\[]+)` +
+	`\]`)
+
+func findIndexToSplit(text string, target int) (int, int) {
+
+	/*
+		We have to cut text in pieces which, when rendered in a telegram message, should
+		be shorter or the same length as target. We could just split on the whitespace
+		character closest to target(and we did before), but it is wrong because:
+		- there may be inline links in vk format which take the form [linkOrId|text] and
+		  are matched by the above regex. To properly count characters which will be rendered
+		  in telegram we have to skip linkOrId part, the '|' and brackets.
+		- While trying to split text on whitespace character, we have to make sure
+		  we don't split the inline link text in case it contains whitespace, or it will break
+		This function counts rendered characters and returns a pair of string index
+		at which to split the text and length of the resulting piece in rendered characters.
+		We do this work before we replace VK link format with <a href...> because vk format
+		is easier to match in regex, and after we have all the split points we will
+		individually replace those links with <a> tags and send to telegram.
+	*/
+
+	matches := inlineLinkRegex.FindAllStringSubmatchIndex(text, -1)
+	// index of current inline link
+	curMatch := 0
+	// number of *rendered* characters - not counting inline parts of links
+	charCount := 0
+	// index at which to split
+	splitIndex := 0
+	// split index in rendered characters
+	splitCharacterIndex := 0
+
+	for i, c := range text {
+		if curMatch < len(matches) {
+			if matches[curMatch][0] <= i && i < matches[curMatch][1] {
+				// if we're inside link, don't count any characters which will not be rendered.
+				// indices 6 and 7 contain bounds of the rendered link text
+				if matches[curMatch][6] <= i && i < matches[curMatch][7] {
+					charCount++
+				}
+				continue
+			}
+			if i >= matches[curMatch][1] { // end of match, move to the next
+				curMatch++
+			}
+		}
+
+		if charCount >= target {
+			if isSeparator(c) && charCount == target {
+				return i, charCount
+			}
+			if splitIndex > 0 {
+				return splitIndex, splitCharacterIndex
+			} else {
+				// if there were no separators, or the whole text is a big link,
+				// give up and just split on the given index
+				return len(string([]rune(text)[:target])), target
+			}
+		}
+		// we're not inside inline link, it's safe to split on a whitespace
+		if isSeparator(c) {
+			splitIndex = i
+			splitCharacterIndex = charCount
+		}
+		charCount++
 	}
-	maxCharsToSkip := 100
-	res := target
-	for !isSeparator(text[res]) &&
-		res > 0 &&
-		target-res < maxCharsToSkip {
-		res--
-	}
-	if !isSeparator(text[res]) {
-		return target
-	}
-	return res
+	// We counted all characters and are still within the limit, so return the whole text
+	return len(text), charCount
 }
 
 // Return a random time in the range (n - 1), (n + 1) days.
