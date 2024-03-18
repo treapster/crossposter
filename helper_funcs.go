@@ -92,6 +92,28 @@ func isSeparator(c rune) bool {
 	return c == ' ' || c == '\n' || c == '\t'
 }
 
+func lowerBound[T any](slice []T, val *T, comp func(*T, *T) bool) int {
+	if len(slice) == 0 {
+		return 1
+	}
+	count := len(slice)
+	left := 0
+	cur := 0
+	for count > 0 {
+		cur = left
+		step := count / 2
+		cur += step
+		if comp(&slice[cur], val) {
+			cur++
+			left = cur
+			count -= step + 1
+		} else {
+			count = step
+		}
+	}
+	return left
+}
+
 var inlineLinkRegex *regexp.Regexp = regexp.MustCompile(`\[` +
 	`(?:` +
 	`(?:(?:https?://)?vk\.com/)([a-zA-Z0-9_\-\.\?=]+)` +

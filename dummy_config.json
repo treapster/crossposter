@@ -7,5 +7,6 @@
     "UpdatePeriod": 5,
     "BatchSize": 12,
     "NPostsToFetch": 30,
-    "SubsLimit": 40
+    "SubsLimit": 40,
+    "BotAdmins": []
 }

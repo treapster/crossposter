@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	vkApi "github.com/SevereCloud/vksdk/v2/api"
@@ -67,6 +68,44 @@ type preparedPost struct {
 type update struct {
 	posts []preparedPost
 	flags uint64
+}
+
+type updateInfo struct {
+	time   int64
+	nPosts int
+}
+
+type stats struct {
+	nPostsGlobal int
+	updates      []updateInfo
+	startTime    int64
+	m            sync.Mutex
+}
+
+func (s *stats) addUpdate(u updateInfo) {
+	s.m.Lock()
+	defer s.m.Unlock()
+	s.nPostsGlobal += u.nPosts
+	s.updates = append(s.updates, u)
+}
+
+func (s *stats) get() (int, int, int64) {
+	comp := func(l *updateInfo, r *updateInfo) bool {
+		return l.time < r.time
+	}
+	now := time.Now().Unix()
+	hourAgo := updateInfo{
+		time: now - 3600,
+	}
+	s.m.Lock()
+	defer s.m.Unlock()
+	lb := lowerBound(s.updates, &hourAgo, comp)
+	lastHour := 0
+	for i := lb; i < len(s.updates); i++ {
+		lastHour += s.updates[i].nPosts
+	}
+	uptime := now - s.startTime
+	return s.nPostsGlobal, lastHour, uptime
 }
 
 func makeObjects(batch []vkReqData) string {
@@ -372,9 +411,18 @@ func (cp *Crossposter) processBatch(batch []vkReqData) {
 			log.Println("Unknown error type: ", reflect.TypeOf(err))
 		}
 	} else {
+		nUpdates := 0
+		time := time.Now().Unix()
 		for i := range res {
 			cp.updateTimeStamp(res[i].Id, res[i].LastPost)
+			nUpdates += len(res[i].Posts)
 			cp.ps.publish(res[i].Id, cp.preparePosts(res[i].Posts, true /*HandleReposts*/))
+		}
+		if nUpdates > 0 {
+			cp.stats.addUpdate(updateInfo{
+				time,
+				nUpdates,
+			})
 		}
 	}
 }

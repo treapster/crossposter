@@ -104,6 +104,8 @@ type CrossposterConfig struct {
 
 	// Max subscriptions per user
 	SubsLimit int
+	// For priveledged commands
+	BotAdmins []int64
 }
 
 type resolvedVkId struct {
@@ -138,6 +140,8 @@ type Crossposter struct {
 	batchSize        int
 	nPostsToFetch    int
 	subsLimit        int
+	stats            stats
+	botAdmins        []int64
 }
 
 type pubSubData struct {
@@ -154,6 +158,7 @@ const (
 	reqShowSubs    string = "/ls"
 	reqHelp        string = "/help"
 	reqStart       string = "/start"
+	reqStats       string = "/stats"
 	kateUserAgent  string = "KateMobileAndroid/56 lite-460 (Android 4.4.2; SDK 19; x86; unknown Android SDK built for x86; en)"
 )
 
@@ -522,6 +527,44 @@ func (cp *Crossposter) handleShow(c tele.Context) error {
 	return c.Send(msg)
 }
 
+func (cp *Crossposter) handleStats(c tele.Context) error {
+
+	sql :=
+		`select * from (select count(*) from subscribers where id > 0),
+(select count(*) from subscribers where id < 0),
+(select count(*) from publishers),
+(select count(*) from pubsub),
+(select count(*) from (select distinct userID from pubsub));`
+	rows, err := cp.db.Query(sql)
+	if err != nil {
+		log.Print(err.Error())
+		return c.Send(err.Error())
+	}
+
+	var subsPeople, subsChannels, publishers, subscriptions, users int64
+	for rows.Next() {
+		rows.Scan(&subsPeople, &subsChannels, &publishers, &subscriptions, &users)
+	}
+
+	dbInfo := fmt.Sprintf(`%d subscribed people
+%d subscribed channels
+%d publishers
+%d subscriptions
+%d total users`, subsPeople, subsChannels, publishers, subscriptions, users)
+
+	totalPosts, lastHour, uptime := cp.stats.get()
+	d := uptime / (24 * 3600)
+	hr := (uptime % (24 * 3600)) / 3600
+	min := (uptime % 3600) / 60
+	sec := uptime % 60
+	uptimeInfo := fmt.Sprintf("Uptime %dd %dhr %dmin %ds", d, hr, min, sec)
+	hrFloat := float64(uptime) / 3600
+	avgPosts := float64(totalPosts) / hrFloat
+	postsInfo := fmt.Sprintf("%d total posts since launch, %d last hour, avg %.2f/hr", totalPosts, lastHour, avgPosts)
+	msg := strings.Join([]string{uptimeInfo, postsInfo, dbInfo}, "\n")
+	return c.Send(msg)
+}
+
 func createTableIfNotExists(db *sql.DB, subsLimit int) (sql.Result, error) {
 	trigger := fmt.Sprintf(
 		// remove prev trigger to propagate possible changes to subsLimit
@@ -672,22 +715,41 @@ func (cp *Crossposter) readDB() error {
 	}
 	return nil
 }
+
+func (cp *Crossposter) isUserBotAdmin(id int64) bool {
+	for _, adminID := range cp.botAdmins {
+		if id == adminID {
+			return true
+		}
+	}
+	return false
+}
+
 func (cp *Crossposter) setHandlers() {
-	cp.tgBot.Handle(reqSubscribe, func(c tele.Context) error {
-		return cp.handleAdd(c)
-	})
-	cp.tgBot.Handle(reqHelp, func(c tele.Context) error {
-		return cp.handleHelp(c)
-	})
-	cp.tgBot.Handle(reqShowSubs, func(c tele.Context) error {
-		return cp.handleShow(c)
-	})
-	cp.tgBot.Handle(reqUnsubscribe, func(c tele.Context) error {
-		return cp.handleDel(c)
-	})
-	cp.tgBot.Handle(reqStart, func(c tele.Context) error {
-		return cp.handleHelp(c)
-	})
+	type commandHandler = func(*Crossposter, tele.Context) error
+	regularHandler := func(impl commandHandler) tele.HandlerFunc {
+		cp := cp
+		return func(c tele.Context) error {
+			return impl(cp, c)
+		}
+	}
+
+	priveledgedHandler := func(impl commandHandler) tele.HandlerFunc {
+		cp := cp
+		return func(c tele.Context) error {
+			if !cp.isUserBotAdmin(c.Sender().ID) {
+				return nil
+			}
+			return impl(cp, c)
+		}
+	}
+
+	cp.tgBot.Handle(reqSubscribe, regularHandler((*Crossposter).handleAdd))
+	cp.tgBot.Handle(reqHelp, regularHandler((*Crossposter).handleHelp))
+	cp.tgBot.Handle(reqShowSubs, regularHandler((*Crossposter).handleShow))
+	cp.tgBot.Handle(reqUnsubscribe, regularHandler((*Crossposter).handleDel))
+	cp.tgBot.Handle(reqStart, regularHandler((*Crossposter).handleHelp))
+	cp.tgBot.Handle(reqStats, priveledgedHandler((*Crossposter).handleStats))
 
 }
 
@@ -715,6 +777,11 @@ func NewCrossposter(cfg CrossposterConfig) (*Crossposter, error) {
 	}
 	cp.subsLimit = cfg.SubsLimit
 
+	if len(cfg.BotAdmins) > 0 {
+		cp.botAdmins = cfg.BotAdmins
+	} else {
+		log.Print("BotAdmins not provided, /stats command won't work\n")
+	}
 	var err error
 	cp.tgBot, err = tele.NewBot(tele.Settings{
 		Token:     cfg.TgToken,
@@ -747,7 +814,7 @@ func NewCrossposter(cfg CrossposterConfig) (*Crossposter, error) {
 	return cp, nil
 }
 func (cp *Crossposter) Start() {
-
+	cp.stats.startTime = time.Now().Unix()
 	go cp.startCrossposting()
 	cp.tgBot.Start()
 }
