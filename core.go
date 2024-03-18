@@ -106,6 +106,9 @@ type CrossposterConfig struct {
 	SubsLimit int
 	// For priveledged commands
 	BotAdmins []int64
+	// If true, the bot will only respond to commands from users
+	// listed in BotAdmins
+	IsPrivate bool
 }
 
 type resolvedVkId struct {
@@ -142,6 +145,7 @@ type Crossposter struct {
 	subsLimit        int
 	stats            stats
 	botAdmins        []int64
+	isPrivate        bool
 }
 
 type pubSubData struct {
@@ -730,6 +734,9 @@ func (cp *Crossposter) setHandlers() {
 	regularHandler := func(impl commandHandler) tele.HandlerFunc {
 		cp := cp
 		return func(c tele.Context) error {
+			if cp.isPrivate && !cp.isUserBotAdmin(c.Sender().ID) {
+				return nil
+			}
 			return impl(cp, c)
 		}
 	}
@@ -779,9 +786,12 @@ func NewCrossposter(cfg CrossposterConfig) (*Crossposter, error) {
 
 	if len(cfg.BotAdmins) > 0 {
 		cp.botAdmins = cfg.BotAdmins
+	} else if cfg.IsPrivate {
+		return nil, fmt.Errorf("cannot start in private mode with no admins in config")
 	} else {
 		log.Print("BotAdmins not provided, /stats command won't work\n")
 	}
+	cp.isPrivate = cfg.IsPrivate
 	var err error
 	cp.tgBot, err = tele.NewBot(tele.Settings{
 		Token:     cfg.TgToken,
