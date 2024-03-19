@@ -12,4 +12,4 @@ Try it yourself on [telegram](https://t.me/vkcrosspostbot).
 Clone repo, go build. Rename `dummy_config.json` to `config.json`. To crosspost audio get a kate mobile token with [this tool](https://github.com/vodka2/vk-audio-token) and set it to `VkAudioToken`. If your primary token has access to audio you can use it for audio. Set service token to `VkToken` and telegram token to `TgToken`. Then launch bot and try it out in telegram.
 
 # Private mode
-In case you want the bot to only work for you, set `IsPrivate` in config and add your id to BotAdmins. You can add multiple admins to share the bot with friends. In private mode commands fron users not listed in BotAdmins will be ignored.
+In case you want the bot to only work for you, set `IsPrivate` in config and add your id to BotAdmins. You can add multiple admins to share the bot with friends. In private mode commands from users not listed in BotAdmins will be ignored.
