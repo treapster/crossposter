@@ -439,6 +439,7 @@ func (cp *Crossposter) startCrossposting() {
 			if len(batch)%cp.batchSize == 0 {
 				cp.ps.mu.RUnlock()
 				cp.processBatch(batch)
+				time.Sleep(300 * time.Millisecond)
 				cp.ps.mu.RLock()
 				batch = batch[:0]
 			}
@@ -446,6 +447,7 @@ func (cp *Crossposter) startCrossposting() {
 		cp.ps.mu.RUnlock()
 		if len(batch) > 0 {
 			cp.processBatch(batch)
+			time.Sleep(300 * time.Millisecond)
 			batch = batch[:0]
 		}
 		select {
