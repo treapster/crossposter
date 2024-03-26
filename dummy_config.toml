@@ -3,9 +3,17 @@ VkAudioToken = ""
 VkApiVersion = "5.131"
 TgToken = ""
 DbName = "./crossposter.db"
+# time in minutes between batched wall.get requests
 UpdatePeriod = 5
+# how many pages are checked for updates in one vkapi.execute request
+# for me 13 or more caused issues, even though vk API claims to support 25
 BatchSize = 12
+# count passed to wall.get
 NPostsToFetch = 30
+# limit of subscriptions per user
 SubsLimit = 40
+# Who can execute priveledged commands(currently only /stats)
+# and use the bot in private mode. Put telegram user IDs here.
 BotAdmins = []
+# when true, bot ignores everyone not listed in BotAdmins
 IsPrivate = false
