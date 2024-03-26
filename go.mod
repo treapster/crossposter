@@ -5,6 +5,7 @@ go 1.19
 require (
 	github.com/SevereCloud/vksdk/v2 v2.15.0
 	github.com/mattn/go-sqlite3 v1.14.16
+	github.com/BurntSushi/toml v1.3.2
 	gopkg.in/telebot.v3 v3.1.2
 )
 

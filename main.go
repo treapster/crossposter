@@ -1,20 +1,21 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
+
+	toml "github.com/BurntSushi/toml"
 )
 
 func main() {
 	var config CrossposterConfig
-	data, err := os.ReadFile("./config.json")
+	data, err := os.ReadFile("./config.toml")
 	if err != nil {
 		log.Printf(err.Error() + "\n")
 		return
 	}
-	err = json.Unmarshal(data, &config)
+	err = toml.Unmarshal(data, &config)
 	if err != nil {
 		log.Printf(err.Error() + "\n")
 		return

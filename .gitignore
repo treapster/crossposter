@@ -1,5 +1,6 @@
 .vscode
 crossposter.db
 config.json
+config.toml
 crossposter
 *.tmp

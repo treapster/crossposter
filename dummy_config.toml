@@ -1,0 +1,11 @@
+VkToken = ""
+VkAudioToken = ""
+VkApiVersion = "5.131"
+TgToken = ""
+DbName = "./crossposter.db"
+UpdatePeriod = 5
+BatchSize = 12
+NPostsToFetch = 30
+SubsLimit = 40
+BotAdmins = []
+IsPrivate = false
