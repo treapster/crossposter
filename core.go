@@ -406,11 +406,12 @@ func (cp *Crossposter) handleDel(c tele.Context) error {
 	}
 
 	rows.Close()
-	_, err = cp.db.Exec("begin transaction;"+
-		"delete from pubSub where userID=? and pubSubID=?;"+
-		"delete from publishers where id not in (select pubID from pubSub);"+
-		"delete from subscribers where id not in (select subID from pubSub);"+
-		"commit;", c.Sender().ID, pubSubID, pubID)
+	_, err = cp.db.Exec(`
+begin transaction;
+delete from pubSub where userID=? and pubSubID=?;
+delete from publishers where id not in (select pubID from pubSub);
+delete from subscribers where id not in (select subID from pubSub);
+commit;`, c.Sender().ID, pubSubID, pubID)
 	if err != nil {
 		return err
 	}
@@ -463,12 +464,12 @@ func (cp *Crossposter) handleAdd(c tele.Context) error {
 		lastPost: 0,
 	}
 
-	_, err = cp.db.Exec(
-		"begin transaction;"+
-			"insert or ignore into publishers (id, lastPost) values(?,(select strftime('%s')));"+
-			"insert or ignore into subscribers (id, flags) values(?, ?);"+
-			"insert or rollback into pubSub (userID, pubID, subID, flags) values (?, ?, ?, ?);"+
-			"commit;",
+	_, err = cp.db.Exec(`
+begin transaction;
+insert or ignore into publishers (id, lastPost) values(?,(select strftime('%s')));
+insert or ignore into subscribers (id, flags) values(?, ?);
+insert or rollback into pubSub (userID, pubID, subID, flags) values (?, ?, ?, ?);
+commit;`,
 		res.pubID, res.subID, flags, userID, res.pubID, res.subID, flags)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
@@ -533,8 +534,8 @@ func (cp *Crossposter) handleShow(c tele.Context) error {
 
 func (cp *Crossposter) handleStats(c tele.Context) error {
 
-	sql :=
-		`select * from (select count(*) from subscribers where id > 0),
+	sql := `
+select * from (select count(*) from subscribers where id > 0),
 (select count(*) from subscribers where id < 0),
 (select count(*) from publishers),
 (select count(*) from pubsub),
@@ -573,26 +574,26 @@ func createTableIfNotExists(db *sql.DB, subsLimit int) (sql.Result, error) {
 	trigger := fmt.Sprintf(
 		// remove prev trigger to propagate possible changes to subsLimit
 		// to the database
-		"drop trigger if exists checkSubsCount;\n"+
-			"create trigger checkSubsCount before insert on pubSub\n"+
-			"begin\n"+
-			"select case when (select count(*) from pubsub where userID=NEW.userID) >= %d then raise(ROLLBACK, \"too many subscriptions\") else '' end;\n"+
-			"end;",
+		`
+drop trigger if exists checkSubsCount;
+create trigger checkSubsCount before insert on pubSub
+begin
+select case when (select count(*) from pubsub where userID=NEW.userID) >= %d then raise(ROLLBACK, \"too many subscriptions\") else '' end;
+end;`,
 		subsLimit)
-	return db.Exec(
-		"create table if not exists publishers" +
-			"(id integer primary key, lastPost integer);" +
-			"create table if not exists subscribers" +
-			"(id integer primary key, flags integer);" +
-			"create table if not exists pubSub" +
-			"(pubSubID integer primary key, userID integer, pubID integer, subID integer, flags integer, " +
-			"unique(pubID, subID), " +
-			"foreign key (pubID) references publishers(id)," +
-			"foreign key (subID) references subscribers(id));" +
-			"create index if not exists pub on pubSub (pubID);" +
-			"create index if not exists sub on pubSub (subID);" +
-			"create index if not exists user on pubSub (userID);" +
-			trigger)
+	return db.Exec(`
+create table if not exists publishers
+(id integer primary key, lastPost integer);
+create table if not exists subscribers
+(id integer primary key, flags integer);
+create table if not exists pubSub
+(pubSubID integer primary key, userID integer, pubID integer, subID integer, flags integer, unique(pubID, subID),
+foreign key (pubID) references publishers(id),
+foreign key (subID) references subscribers(id));
+create index if not exists pub on pubSub (pubID);
+create index if not exists sub on pubSub (subID);
+create index if not exists user on pubSub (userID);`,
+		trigger)
 }
 
 func (cp *Crossposter) updateTimeStamp(id int64, newTimeStamp int64) {
