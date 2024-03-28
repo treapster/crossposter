@@ -58,7 +58,7 @@ var i18n = map[string]botReplies{
 /ls - показать подписки
 
 <code>/del [номер]</code> - удалить подписку с данным номером`,
-		okAdded:           "%s теперь подписан на %s",
+		okAdded:           "%s теперь подписан на %s, id подписки %d",
 		noSuchGroup:       "Группа %s не существует",
 		noSuchUser:        "Пользователь %s не существует",
 		noSuchChannel:     "Канал %s не существует",
@@ -464,7 +464,7 @@ func (cp *Crossposter) handleAdd(c tele.Context) error {
 		lastPost: 0,
 	}
 
-	_, err = cp.db.Exec(`
+	queryRes, err := cp.db.Exec(`
 begin transaction;
 insert or ignore into publishers (id, lastPost) values(?,(select strftime('%s')));
 insert or ignore into subscribers (id, flags) values(?, ?);
@@ -489,11 +489,15 @@ commit;`,
 		}
 		return err
 	}
+	newID, err := queryRes.LastInsertId()
+	if err != nil {
+		log.Println("Error fetching LastInsertId!", err.Error())
+	}
 	cp.ps.subscribe(tgId, vkId, flags, func(ch <-chan update) {
 		cp.listenAndForward(ch, tgId)
 	})
-	c.Send(fmt.Sprintf(i18n[lang].okAdded, tgName, "vk.com/"+vkName))
-	log.Printf("%d (%s) subscribed to vk.com/%s\n", tgId, tgName, vkName)
+	c.Send(fmt.Sprintf(i18n[lang].okAdded, tgName, "vk.com/"+vkName, newID))
+	log.Printf("%d (%s) subscribed to vk.com/%s, pubsubID %d\n", tgId, tgName, vkName, newID)
 	return nil
 }
 func (cp *Crossposter) handleShow(c tele.Context) error {
