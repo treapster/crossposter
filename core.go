@@ -33,6 +33,7 @@ type botReplies struct {
 	notAdmin          string
 	alreadySubscribed string
 	subsLimitReached  string
+	details           string
 }
 
 var i18n = map[string]botReplies{
@@ -57,7 +58,9 @@ var i18n = map[string]botReplies{
 
 /ls - показать подписки
 
-<code>/del [номер]</code> - удалить подписку с данным номером`,
+<code>/del [номер]</code> - удалить подписку с данным номером
+
+Для подробностей, отправь ` + reqDetails,
 		okAdded:           "%s теперь подписан на %s, id подписки %d",
 		noSuchGroup:       "Группа %s не существует",
 		noSuchUser:        "Пользователь %s не существует",
@@ -71,6 +74,13 @@ var i18n = map[string]botReplies{
 		noSubs:            "Список каналов пуст",
 		notAdmin:          "Как минимум одному из нас не хватает прав администратора этого чата. Они должны быть у нас обоих.",
 		subsLimitReached:  "Достигнут лимит в %d подписок для одного пользователя.",
+		details: `Бот получает обновления с пабликов каждые %d минут, посты из вк будут приходить в телегу с такой задержкой или меньше.
+Один пользователь может создавать не более %d подписок. Это число, как и интервал обновления, может меняться админом бота в будущем.
+Для репостов всегда указывается источник, и цепи репостов раскрываются в хронологическом порядке - репост будет ответом на оригинальный пост, если репост не пустой. Если репост не содержит текст или медиа, в телеграм отправится только оригинальный пост с указанием источника.
+Из медиа поддерживаются фото и видео(длинные в виде ссылки), документы и музыку бот пытается достать, но получается не всегда. Опросы и плейлисты пока не реализованы.
+
+Канал с новостями: @vkcrosspostnews
+Код: github.com/treapster/crossposter`,
 	},
 }
 
@@ -163,6 +173,7 @@ const (
 	reqHelp        string = "/help"
 	reqStart       string = "/start"
 	reqStats       string = "/stats"
+	reqDetails     string = "/details"
 	kateUserAgent  string = "KateMobileAndroid/56 lite-460 (Android 4.4.2; SDK 19; x86; unknown Android SDK built for x86; en)"
 )
 
@@ -425,6 +436,14 @@ func (cp *Crossposter) handleHelp(c tele.Context) error {
 	lang := getLang(c)
 	return c.Send(i18n[lang].helpMsg)
 }
+
+func (cp *Crossposter) handleDetails(c tele.Context) error {
+	lang := getLang(c)
+
+	msgText := fmt.Sprintf(i18n[lang].details, int(cp.updatePeriod.Minutes()), cp.subsLimit)
+	return c.Send(msgText)
+}
+
 func (cp *Crossposter) handleAdd(c tele.Context) error {
 	msg := c.Text()
 	matches := cp.addMsgRegex.FindStringSubmatch(msg)
@@ -761,8 +780,9 @@ func (cp *Crossposter) setHandlers() {
 	cp.tgBot.Handle(reqShowSubs, regularHandler((*Crossposter).handleShow))
 	cp.tgBot.Handle(reqUnsubscribe, regularHandler((*Crossposter).handleDel))
 	cp.tgBot.Handle(reqStart, regularHandler((*Crossposter).handleHelp))
-	cp.tgBot.Handle(reqStats, priveledgedHandler((*Crossposter).handleStats))
+	cp.tgBot.Handle(reqDetails, regularHandler((*Crossposter).handleDetails))
 
+	cp.tgBot.Handle(reqStats, priveledgedHandler((*Crossposter).handleStats))
 }
 
 func NewCrossposter(cfg CrossposterConfig) (*Crossposter, error) {
