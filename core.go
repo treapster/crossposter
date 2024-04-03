@@ -169,7 +169,7 @@ type pubSubData struct {
 const (
 	reqSubscribe   string = "/add"
 	reqUnsubscribe string = "/del"
-	reqShowSubs    string = "/ls"
+	reqListSubs    string = "/ls"
 	reqHelp        string = "/help"
 	reqStart       string = "/start"
 	reqStats       string = "/stats"
@@ -519,7 +519,7 @@ commit;`,
 	log.Printf("%d (%s) subscribed to vk.com/%s, pubsubID %d\n", tgId, tgName, vkName, newID)
 	return nil
 }
-func (cp *Crossposter) handleShow(c tele.Context) error {
+func (cp *Crossposter) handleLs(c tele.Context) error {
 	rows, err := cp.dbSelectStmt.Query(c.Sender().ID)
 	if err != nil {
 		return err
@@ -777,7 +777,7 @@ func (cp *Crossposter) setHandlers() {
 
 	cp.tgBot.Handle(reqSubscribe, regularHandler((*Crossposter).handleAdd))
 	cp.tgBot.Handle(reqHelp, regularHandler((*Crossposter).handleHelp))
-	cp.tgBot.Handle(reqShowSubs, regularHandler((*Crossposter).handleShow))
+	cp.tgBot.Handle(reqListSubs, regularHandler((*Crossposter).handleLs))
 	cp.tgBot.Handle(reqUnsubscribe, regularHandler((*Crossposter).handleDel))
 	cp.tgBot.Handle(reqStart, regularHandler((*Crossposter).handleHelp))
 	cp.tgBot.Handle(reqDetails, regularHandler((*Crossposter).handleDetails))
