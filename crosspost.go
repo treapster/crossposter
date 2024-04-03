@@ -242,7 +242,7 @@ func (cp *Crossposter) getAttachments(post *vkObject.WallWallpost) preparedAttac
 	return res
 }
 
-func (cp *Crossposter) sendText(text string, link postLink, chat int64) *tele.Message {
+func (cp *Crossposter) sendText(text string, link postLink, chat int64, opts tele.SendOptions) *tele.Message {
 	text = strings.Trim(text, " \t\n")
 	if len(text) == 0 {
 		return nil
@@ -250,9 +250,8 @@ func (cp *Crossposter) sendText(text string, link postLink, chat int64) *tele.Me
 	if len(text) > 0 && link.postLinkTextLen > 0 {
 		text = text + "\n\n"
 	}
-	var opts tele.SendOptions
-	opts.ParseMode = "HTML"
-	var msg *tele.Message
+
+	var firstMsg *tele.Message
 	appendedLink := false
 	maxMsgSize := 4096
 	for len(text) > 0 || (len(link.formattedPostLink) > 0 && !appendedLink) {
@@ -267,25 +266,28 @@ func (cp *Crossposter) sendText(text string, link postLink, chat int64) *tele.Me
 			msgText = msgText + link.formattedPostLink
 			appendedLink = true
 		}
-		var err error
-		msg, err = cp.tgBot.Send(tele.ChatID(chat), msgText, &opts)
+
+		newMsg, err := cp.tgBot.Send(tele.ChatID(chat), msgText, &opts)
 		if err != nil {
 			log.Printf("Failed to send msg for post %s:\n%s\n", link.rawPostLink, err.Error())
+			return nil
 		}
-		opts.ReplyTo = msg
+
+		if firstMsg == nil {
+			firstMsg = newMsg
+		}
+		opts.ReplyTo = newMsg
 		text = strings.TrimLeft(text[splitIndex:], " \t\n")
 		time.Sleep(time.Second * 3)
 	}
-	return msg
+	return firstMsg
 }
-func (cp *Crossposter) sendWithAttachments(text string, link postLink, id int64, att preparedAttachments) *tele.Message {
+func (cp *Crossposter) sendWithAttachments(text string, link postLink, id int64, att preparedAttachments, opts tele.SendOptions) *tele.Message {
 
 	if len(att.links) != 0 {
 		text = text + "\n" + strings.Join(att.links, "\n")
 	}
 
-	var opts tele.SendOptions
-	opts.ParseMode = "HTML"
 	maxMsgSize := 1024
 	_, msgSize := findIndexToSplit(text, 999999) // count rendered characters in a text
 	if link.postLinkTextLen > 0 {
@@ -295,8 +297,9 @@ func (cp *Crossposter) sendWithAttachments(text string, link postLink, id int64,
 		}
 		msgSize += link.postLinkTextLen
 	}
+	var firstMsg *tele.Message = nil
 	if msgSize > maxMsgSize || len(att.media) == 0 {
-		opts.ReplyTo = cp.sendText(text, link, id)
+		firstMsg = cp.sendText(text, link, id, opts)
 		text = text[:0]
 	} else {
 		text = inlineLinkRegex.ReplaceAllString(
@@ -311,19 +314,21 @@ func (cp *Crossposter) sendWithAttachments(text string, link postLink, id int64,
 			return nil
 		}
 
-		// we post attachments as a reply to initial message
-		if opts.ReplyTo == nil && len(msg) > 0 {
-			opts.ReplyTo = &msg[0]
+		// we post attachments as a reply to initial message, while the initial message may be a reply
+		// to another message passed in opts in case of repost chains
+		if firstMsg == nil && len(msg) > 0 {
+			firstMsg = &msg[0]
+			opts.ReplyTo = firstMsg
 		}
 		text = text[:0]
 
 		// simplest way to not exceed 20 messages per minute
 		time.Sleep(time.Second * 3 * time.Duration(len(att.media[mediaType])))
 	}
-	return opts.ReplyTo
+	return firstMsg
 }
 
-func (cp *Crossposter) forwardSinglePost(post *preparedPost, flags uint64, chatID int64) *tele.Message {
+func (cp *Crossposter) forwardSinglePost(post *preparedPost, flags uint64, chatID int64, opts tele.SendOptions) *tele.Message {
 
 	link := post.Link
 	if flags&flagAddLinkToPost == 0 {
@@ -332,18 +337,27 @@ func (cp *Crossposter) forwardSinglePost(post *preparedPost, flags uint64, chatI
 	}
 
 	if post.att.Empty() {
-		return cp.sendText(post.text, link, chatID)
-
+		return cp.sendText(post.text, link, chatID, opts)
 	}
-	return cp.sendWithAttachments(post.text, link, chatID, post.att)
+	return cp.sendWithAttachments(post.text, link, chatID, post.att, opts)
 }
 
 func (cp *Crossposter) forwardPost(post *preparedPost, chatID int64, flags uint64) {
-	var opts tele.SendOptions
-	for i := range post.copyHistory {
-		opts.ReplyTo = cp.forwardSinglePost(&post.copyHistory[i], flags, chatID)
+
+	opts := tele.SendOptions{
+		ParseMode: "HTML",
 	}
-	cp.forwardSinglePost(post, flags, chatID)
+
+	for i := range post.copyHistory {
+		flags := flags
+		// if we have reposts from external pages, add reference to source regardless of setting
+		if post.copyHistory[i].ownerID != post.ownerID {
+			flags |= flagAddLinkToPost
+		}
+
+		opts.ReplyTo = cp.forwardSinglePost(&post.copyHistory[i], flags, chatID, opts)
+	}
+	cp.forwardSinglePost(post, flags, chatID, opts)
 
 }
 func (cp *Crossposter) listenAndForward(upd <-chan update, chatID int64) {
