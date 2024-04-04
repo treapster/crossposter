@@ -301,6 +301,7 @@ func (cp *Crossposter) sendWithAttachments(text string, link postLink, id int64,
 	if msgSize > maxMsgSize || len(att.media) == 0 {
 		firstMsg = cp.sendText(text, link, id, opts)
 		text = text[:0]
+		opts.ReplyTo = firstMsg
 	} else {
 		text = inlineLinkRegex.ReplaceAllString(
 			html.EscapeString(text),
