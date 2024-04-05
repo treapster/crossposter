@@ -47,13 +47,31 @@ type postLink struct {
 	rawPostLink       string
 	postLinkTextLen   int
 }
+
+const (
+	mediaPhotoVideo = iota
+	mediaAudio
+	mediaDoc
+	nMediaTypes
+)
+
+type preparedMedia [nMediaTypes][]tele.Inputtable
 type preparedAttachments struct {
-	media map[string][]tele.Inputtable
+	media preparedMedia
 	links []string
 }
 
+func (m *preparedMedia) Empty() bool {
+	for i := range m {
+		if len(m[i]) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func (att *preparedAttachments) Empty() bool {
-	return len(att.media) == 0 && len(att.links) == 0
+	return att.media.Empty() && len(att.links) == 0
 }
 
 type preparedPost struct {
@@ -198,19 +216,19 @@ func (cp *Crossposter) getVideo(videoIds []string) ([]tele.Inputtable, []string)
 func (cp *Crossposter) getAttachments(post *vkObject.WallWallpost) preparedAttachments {
 
 	// because telegram album contains either photo/video or audio or documents, we separate them
-	res := preparedAttachments{map[string][]tele.Inputtable{}, []string{}}
+	res := preparedAttachments{preparedMedia{}, []string{}}
 	audioIds := []string{}
 	videoIds := []string{}
 	for _, att := range post.Attachments {
 		switch att.Type {
 		case "photo":
 			url := getPhotoUrl(att.Photo)
-			res.media["photo/video"] = append(res.media["photo/video"],
+			res.media[mediaPhotoVideo] = append(res.media[mediaPhotoVideo],
 				&tele.Photo{File: tele.FromURL(url)})
 		case "audio":
 			audioIds = append(audioIds, strconv.Itoa(att.Audio.OwnerID)+"_"+strconv.Itoa(att.Audio.ID))
 		case "doc":
-			res.media["doc"] = append(res.media["doc"],
+			res.media[mediaDoc] = append(res.media[mediaDoc],
 				&tele.Document{File: tele.FromURL(att.Doc.URL)})
 		case "video":
 			vID := strconv.Itoa(att.Video.OwnerID) + "_" + strconv.Itoa(att.Video.ID)
@@ -228,15 +246,11 @@ func (cp *Crossposter) getAttachments(post *vkObject.WallWallpost) preparedAttac
 			len(audioIds), fmt.Sprintf("https://vk.com/wall%d_%d", post.OwnerID, post.ID))
 	}
 
-	if len(audio) > 0 {
-		res.media["audio"] = audio
-	}
+	res.media[mediaAudio] = audio
 
 	if len(videoIds) > 0 {
 		vids, links := cp.getVideo(videoIds)
-		if len(vids) > 0 {
-			res.media["photo/video"] = append(res.media["photo/video"], vids...)
-		}
+		res.media[mediaPhotoVideo] = append(res.media[mediaPhotoVideo], vids...)
 		res.links = links
 	}
 	return res
@@ -298,7 +312,7 @@ func (cp *Crossposter) sendWithAttachments(text string, link postLink, id int64,
 		msgSize += link.postLinkTextLen
 	}
 	var firstMsg *tele.Message = nil
-	if msgSize > maxMsgSize || len(att.media) == 0 {
+	if msgSize > maxMsgSize || att.media.Empty() {
 		firstMsg = cp.sendText(text, link, id, opts)
 		text = text[:0]
 		opts.ReplyTo = firstMsg
@@ -309,6 +323,9 @@ func (cp *Crossposter) sendWithAttachments(text string, link postLink, id int64,
 			link.formattedPostLink
 	}
 	for mediaType := range att.media {
+		if len(att.media[mediaType]) == 0 {
+			continue
+		}
 		msg, err := cp.tgBot.SendAlbum(tele.ChatID(id), att.media[mediaType], text, &opts)
 		if err != nil {
 			log.Printf("Failed to send msg for post %s:\n%s\n", link.rawPostLink, err.Error())
