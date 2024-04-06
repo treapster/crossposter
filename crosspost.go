@@ -283,7 +283,7 @@ func (cp *Crossposter) sendText(text string, link postLink, chat int64, opts tel
 
 		newMsg, err := cp.tgBot.Send(tele.ChatID(chat), msgText, &opts)
 		if err != nil {
-			log.Printf("Failed to send msg for post %s:\n%s\n", link.rawPostLink, err.Error())
+			log.Printf("Failed to send text message for post %s:\n%s\n", link.rawPostLink, err.Error())
 			return nil
 		}
 
@@ -328,7 +328,7 @@ func (cp *Crossposter) sendWithAttachments(text string, link postLink, id int64,
 		}
 		msg, err := cp.tgBot.SendAlbum(tele.ChatID(id), att.media[mediaType], text, &opts)
 		if err != nil {
-			log.Printf("Failed to send msg for post %s:\n%s\n", link.rawPostLink, err.Error())
+			log.Printf("Failed to send attachment for post %s:\n%s\n", link.rawPostLink, err.Error())
 			return nil
 		}
 
