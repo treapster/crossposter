@@ -329,7 +329,11 @@ func (cp *Crossposter) sendWithAttachments(text string, link postLink, id int64,
 		msg, err := cp.tgBot.SendAlbum(tele.ChatID(id), att.media[mediaType], text, &opts)
 		if err != nil {
 			log.Printf("Failed to send attachment for post %s:\n%s\n", link.rawPostLink, err.Error())
-			return nil
+			if len(text) > 0 {
+				// if we failed to send text, give up and return,
+				// otherwise continue trying to send other attachments.
+				return nil
+			}
 		}
 
 		// we post attachments as a reply to initial message, while the initial message may be a reply
