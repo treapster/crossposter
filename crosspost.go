@@ -282,7 +282,7 @@ func (cp *Crossposter) sendText(text string, link postLink, chat int64, opts tel
 		}
 
 		newMsg, err := cp.tgBot.Send(tele.ChatID(chat), msgText, &opts)
-		time.Sleep(time.Second * 3)
+		time.Sleep(time.Second * 4)
 		if err != nil {
 			log.Printf("Failed to send text message for post %s:\n%s\n", link.rawPostLink, err.Error())
 			return nil
@@ -328,7 +328,7 @@ func (cp *Crossposter) sendWithAttachments(text string, link postLink, id int64,
 		}
 		msg, err := cp.tgBot.SendAlbum(tele.ChatID(id), att.media[mediaType], text, &opts)
 		// simplest way to not exceed 20 messages per minute
-		time.Sleep(time.Second * 3 * time.Duration(len(att.media[mediaType])))
+		time.Sleep(time.Second * 4 * time.Duration(len(att.media[mediaType])))
 		if err != nil {
 			log.Printf("Failed to send attachment for post %s:\n%s\n", link.rawPostLink, err.Error())
 			if len(text) > 0 {
