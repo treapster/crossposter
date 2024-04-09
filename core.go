@@ -203,7 +203,7 @@ const (
 
 	regexAddSub = `^` + reqSubscribe +
 		`\s+` +
-		`(?:(?:https??://)?)` +
+		`(?:https?://)?` +
 		`(?:(?:m\.)?vk.com/(?P<vk>[a-zA-Z0-9_\.]+))\s+` +
 		`(?P<tg>(?:@[a-zA-Z][0-9a-zA-Z_]{4,})|(?:-?[0-9]+)|me)` +
 		`(?P<link_data>` +
