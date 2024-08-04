@@ -601,7 +601,7 @@ func createTableIfNotExists(db *sql.DB, subsLimit int) (sql.Result, error) {
 drop trigger if exists checkSubsCount;
 create trigger checkSubsCount before insert on pubSub
 begin
-select case when (select count(*) from pubsub where userID=NEW.userID) >= %d then raise(ROLLBACK, \"too many subscriptions\") else '' end;
+select case when (select count(*) from pubsub where userID=NEW.userID) >= %d then raise(ROLLBACK, "too many subscriptions") else '' end;
 end;`,
 		subsLimit)
 	return db.Exec(`
@@ -615,7 +615,7 @@ foreign key (pubID) references publishers(id),
 foreign key (subID) references subscribers(id));
 create index if not exists pub on pubSub (pubID);
 create index if not exists sub on pubSub (subID);
-create index if not exists user on pubSub (userID);`,
+create index if not exists user on pubSub (userID);` +
 		trigger)
 }
 
