@@ -116,7 +116,7 @@ func lowerBound[T any](slice []T, val *T, comp func(*T, *T) bool) int {
 
 var inlineLinkRegex *regexp.Regexp = regexp.MustCompile(`\[` +
 	`(?:` +
-	`(?:(?:https?://)?vk\.com/)([a-zA-Z0-9_\-\.\?=]+)` +
+	`(?:(?:https?://)?vk\.(?:com|me)/)([a-zA-Z0-9_\-\.\?=/@]+)` +
 	`|` +
 	`((?:club|id)[0-9]+)` +
 	`)` +
