@@ -857,10 +857,12 @@ func (cp *Crossposter) Stop() {
 	log.Printf("Shutting down, please wait\n")
 	cp.tgBot.Stop()
 	log.Printf("Stopped Telegram bot\n")
-	cp.db.Close()
-	log.Printf("Closed db connection, waiting for workers to finish\n")
 	cp.chDone <- true
 	cp.ps.stopPubSub()
+	log.Printf("Stopped PubSub, waiting for workers to finish\n")
 	cp.wg.Wait()
+	log.Printf("All PubSub workers finished\n")
+	cp.db.Close()
+	log.Printf("Closed db connection\n")
 	log.Printf("Finished\n")
 }
